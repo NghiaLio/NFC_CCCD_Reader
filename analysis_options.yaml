@@ -1,0 +1,11 @@
+include: package:lints/recommended.yaml
+
+linter:
+  rules:
+    # Cô lập import "internal" của dmrtd (CanKey, StatusWord) vào đúng 1 file
+    # adapter/test fixture có comment giải thích — bật rule để nhắc nếu có ai
+    # vô tình thêm import kiểu này ở chỗ khác mà quên `// ignore:`.
+    - implementation_imports
+
+# Additional information about this file can be found at
+# https://dart.dev/guides/language/analysis-options

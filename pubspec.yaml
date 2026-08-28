@@ -1,0 +1,44 @@
+name: nfc_cccd_reader
+description: >
+  Đọc dữ liệu CCCD gắn chip / hộ chiếu điện tử (ICAO 9303 MRTD) qua NFC:
+  PACE (CCCD Việt Nam), BAC (giấy tờ quốc tế), DG1 (MRZ), DG2 (ảnh),
+  DG13 (dữ liệu mở rộng CCCD VN), DG15 + Active Authentication.
+version: 0.1.1
+publish_to: 'none' # đổi khi thật sự publish lên pub.dev/private registry
+
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+  flutter: '>=3.24.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Giao thức MRTD (PACE/BAC, EF.COM, DG1/DG2/DG13/DG15, Active Authentication).
+  # KHÔNG dùng bản pub.dev gốc — xem README "Known issues".
+  dmrtd:
+    git:
+      url: https://github.com/HVLoc/dmrtd
+      ref: flutter/3.41.1
+
+  # Lớp giao tiếp phần cứng NFC (poll thẻ ISO-7816, transceive APDU).
+  flutter_nfc_kit: ^3.4.2
+
+  # Parser ASN.1/BER-TLV cho DG13 (dmrtd không có accessor sẵn cho DG13).
+  asn1lib: ^1.6.5
+
+  # Fingerprint 1 chiều cho log chẩn đoán (không log giá trị PII thật).
+  crypto: ^3.0.3
+  collection: ^1.18.0
+  meta: ^1.15.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  lints: ^4.0.0
+
+# archive: ^4.0.9 là dependency transitive của dmrtd (fork flutter/3.41.1 đã tự
+# khai báo override này rồi) — khai lại ở đây để app tiêu thụ không cần tự làm
+# việc này khi họ có 1 package khác trong tree ép archive lên bản 4.x.
+dependency_overrides:
+  archive: ^4.0.9
