@@ -20,7 +20,26 @@ Package không kèm giao diện. Ứng dụng tự xây màn hình nhập CCCD/C
 ```yaml
 dependencies:
   nfc_cccd_reader:
-    path: ../nfc_cccd_reader
+    git:
+      url: https://github.com/NghiaLio/NFC_CCCD_Reader.git
+      ref: main
+```
+
+Để bảo đảm build lặp lại được, nên thay `main` bằng tag phát hành hoặc commit
+SHA cố định khi tích hợp production:
+
+```yaml
+dependencies:
+  nfc_cccd_reader:
+    git:
+      url: https://github.com/NghiaLio/NFC_CCCD_Reader.git
+      ref: cdcf2cc435cc016c4a5a955103d926ccacd125cf
+```
+
+Sau khi cập nhật `pubspec.yaml`, chạy:
+
+```bash
+flutter pub get
 ```
 
 Import package:
@@ -182,7 +201,6 @@ Có thể dùng `error.type.displayMessage` để lấy thông điệp tiếng V
 
 - Danh sách đầy đủ public API: [API.md](API.md).
 - Ứng dụng mẫu: [example/lib/main.dart](example/lib/main.dart).
-- Thiết kế và ghi chú kỹ thuật: [nfc-plugin-design-spec.md](../nfc-plugin-design-spec.md).
 
 Chạy unit test:
 
