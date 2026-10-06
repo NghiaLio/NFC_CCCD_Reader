@@ -15,11 +15,11 @@ dependencies:
     sdk: flutter
 
   # Giao thức MRTD (PACE/BAC, EF.COM, DG1/DG2/DG13/DG15, Active Authentication).
-  # KHÔNG dùng bản pub.dev gốc — xem README "Known issues".
+  # Vendored tại third_party/dmrtd (fork flutter/3.41.1, commit 4300157) để
+  # kiểm soát/audit code PACE/AA. License LGPL v3 / Commercial — giữ nguyên file
+  # LICENSE trong thư mục đó; xem README "Known issues" và phần license.
   dmrtd:
-    git:
-      url: https://github.com/HVLoc/dmrtd
-      ref: flutter/3.41.1
+    path: third_party/dmrtd
 
   # Lớp giao tiếp phần cứng NFC (poll thẻ ISO-7816, transceive APDU).
   flutter_nfc_kit: ^3.4.2

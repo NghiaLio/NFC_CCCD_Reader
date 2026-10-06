@@ -1,0 +1,4 @@
+# File sinh khi chạy analyze/test riêng của package vendor này.
+.dart_tool/
+pubspec.lock
+build/

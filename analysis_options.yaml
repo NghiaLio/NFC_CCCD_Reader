@@ -1,5 +1,12 @@
 include: package:lints/recommended.yaml
 
+analyzer:
+  # Code dmrtd đã vendored (fork, dual-license LGPL/Commercial) — audit và
+  # analyze/test độc lập từ chính third_party/dmrtd (có dev_deps + config riêng),
+  # không quét chung với package chính.
+  exclude:
+    - third_party/**
+
 linter:
   rules:
     # Cô lập import "internal" của dmrtd (CanKey, StatusWord) vào đúng 1 file

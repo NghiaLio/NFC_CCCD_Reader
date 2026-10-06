@@ -195,7 +195,8 @@ Có thể dùng `error.type.displayMessage` để lấy thông điệp tiếng V
 - Passive Authentication (xác minh SOD/chuỗi CSCA) chưa được triển khai, nên `isChipAuthenticityVerified` hiện luôn là `false`.
 - Một Data Group đọc lỗi sẽ được ghi vào `warnings` khi có thể; mất kết nối thẻ thực sự vẫn làm phiên đọc thất bại.
 - Cấu hình iOS chưa được xác minh trên thiết bị thật trong repository này.
-- Package sử dụng fork `HVLoc/dmrtd`; cần rà soát khả năng bảo trì và license trước khi dùng thương mại.
+- Giao thức MRTD (PACE/AA/Secure Messaging) được **vendored** tại `third_party/dmrtd` (fork `HVLoc/dmrtd`, branch `flutter/3.41.1`, commit `4300157`) để tự kiểm soát, audit và patch được code. Chạy test riêng: `cd third_party/dmrtd && flutter test`.
+- License của `dmrtd` là **dual: LGPL v3 / Commercial** (file `LICENSE.LGPL` + `LICENSE.COMMERCIAL` trong `third_party/dmrtd`). Nếu bạn **modify** code dmrtd thì phần sửa phải được chia sẻ theo LGPL; nếu dùng **thương mại** và không muốn ràng buộc LGPL thì liên hệ mua license Commercial. Rà soát trước khi phát hành.
 
 ## Tài liệu và kiểm thử
 
