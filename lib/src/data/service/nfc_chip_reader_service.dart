@@ -3,7 +3,9 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:dmrtd/dmrtd.dart';
+import 'package:dmrtd/extensions.dart';
 
+import '../../core/nfc_constants.dart';
 import '../../domain/entities/nfc_failure.dart';
 import '../../domain/entities/nfc_read_input.dart';
 import '../../domain/entities/nfc_read_result.dart';
@@ -104,7 +106,9 @@ class NfcChipReaderService {
     try {
       switch (input.mode) {
         case NfcSessionMode.pace:
-          final efCardAccess = await passport.readEfCardAccess();
+          final efCardAccess = EfCardAccess.fromBytes(
+            NfcConstants.keyAccessDataNFCIos.parseHex(),
+          );
           final accessKey = buildCanAccessKey(input.can!);
           await passport.startSessionPACE(accessKey, efCardAccess);
         case NfcSessionMode.bac:

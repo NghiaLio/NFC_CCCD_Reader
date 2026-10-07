@@ -26,7 +26,7 @@ class _NfcScanExamplePageState extends State<NfcScanExamplePage> {
   final _reader = NfcCccdReader(
     logSink: (msg) => debugPrint('[NFC] $msg'),
   );
-  final _cccdController = TextEditingController();
+  final _cccdController = TextEditingController(text: "026204001084");
 
   NfcReadStage? _stage;
   NfcReadResult? _result;
