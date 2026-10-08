@@ -7,6 +7,7 @@ import 'data/service/nfc_chip_reader_service.dart';
 import 'domain/entities/nfc_failure.dart';
 import 'domain/entities/nfc_read_input.dart';
 import 'domain/entities/nfc_read_result.dart';
+import 'domain/entities/nfc_trace_event.dart';
 import 'domain/enums/nfc_availability_status.dart';
 import 'domain/enums/nfc_read_stage.dart';
 import 'domain/repository/nfc_repository.dart';
@@ -14,9 +15,6 @@ import 'domain/repository/nfc_repository.dart';
 abstract interface class NfcCccdReader {
   /// Khởi tạo instance mặc định (dùng flutter_nfc_kit + dmrtd thật).
   factory NfcCccdReader({
-    /// Hook log tuỳ chọn — KHÔNG bao giờ nhận PII/CAN/challenge/signature thật,
-    /// chỉ nhận thông điệp đã được rút gọn/ẩn danh sẵn từ bên trong package.
-    void Function(String message)? logSink,
     Duration connectTimeout,
   }) = NfcCccdReaderBase;
 
@@ -28,19 +26,25 @@ abstract interface class NfcCccdReader {
   ///
   /// [onStage] được gọi đúng thời điểm từng bước THẬT bắt đầu — dùng để vẽ
   /// progress UI, không phải timer giả lập.
+  ///
+  /// [onTrace] nhận breadcrumb chi tiết (mỗi bước 1 [NfcTraceEvent]) — dùng
+  /// cho log/Sentry. Nếu không truyền, vẫn có thể lắng nghe qua [traceStream].
   Future<NfcReadResult> read(
     NfcReadInput input, {
     void Function(NfcReadStage stage)? onStage,
+    void Function(NfcTraceEvent event)? onTrace,
   });
 
-  /// Biến thể Stream cho state management theo kiểu reactive (Bloc/Riverpod
-  /// StreamProvider...). Emit các `NfcReadStage` khi tiến trình thay đổi, rồi
-  /// đóng stream: thành công → không emit thêm gì, caller `await` chính
-  /// `Future` trả về từ hàm này để lấy `NfcReadResult`; lỗi → stream đóng kèm
-  /// error qua `addError`, đồng thời Future cũng throw cùng [NfcFailure].
-  ///
-  /// Dùng khi cần lắng nghe tiến trình mà không muốn truyền callback lồng.
+  /// Stream các `NfcReadStage` khi tiến trình thay đổi (mốc THÔ cho progress
+  /// bar). Đóng stream: thành công → không emit thêm; lỗi → `addError`, đồng
+  /// thời `Future` của [read] cũng throw cùng [NfcFailure].
   Stream<NfcReadStage> get stageStream;
+
+  /// Stream breadcrumb chi tiết — mỗi bước đọc phát 1 [NfcTraceEvent] (kèm
+  /// `sessionId`, SW1/SW2, độ dài byte, chi tiết đã sanitize — KHÔNG kèm PII).
+  /// App hứng stream này, gom thêm thông tin thiết bị (OS, model) rồi đẩy lên
+  /// Sentry/Crashlytics.
+  Stream<NfcTraceEvent> get traceStream;
 
   /// Huỷ phiên đọc đang chạy (ngắt kết nối NFC giữa chừng).
   Future<void> cancel();
@@ -51,12 +55,10 @@ abstract interface class NfcCccdReader {
 
 class NfcCccdReaderBase implements NfcCccdReader {
   NfcCccdReaderBase({
-    void Function(String message)? logSink,
     Duration connectTimeout = const Duration(seconds: 20),
   }) : _repository = NfcRepositoryImpl(
           chipReaderService: NfcChipReaderService(
             connectTimeout: connectTimeout,
-            logSink: logSink,
           ),
         );
 
@@ -66,6 +68,7 @@ class NfcCccdReaderBase implements NfcCccdReader {
 
   final NfcRepository _repository;
   final _stageController = StreamController<NfcReadStage>.broadcast();
+  final _traceController = StreamController<NfcTraceEvent>.broadcast();
 
   @override
   Future<NfcAvailabilityStatus> checkAvailability() =>
@@ -75,12 +78,17 @@ class NfcCccdReaderBase implements NfcCccdReader {
   Future<NfcReadResult> read(
     NfcReadInput input, {
     void Function(NfcReadStage stage)? onStage,
+    void Function(NfcTraceEvent event)? onTrace,
   }) {
     return _repository.readChip(
       input,
       onStage: (stage) {
         _stageController.add(stage);
         onStage?.call(stage);
+      },
+      onTrace: (event) {
+        _traceController.add(event);
+        onTrace?.call(event);
       },
     );
   }
@@ -89,8 +97,14 @@ class NfcCccdReaderBase implements NfcCccdReader {
   Stream<NfcReadStage> get stageStream => _stageController.stream;
 
   @override
+  Stream<NfcTraceEvent> get traceStream => _traceController.stream;
+
+  @override
   Future<void> cancel() => _repository.cancel();
 
   @override
-  void dispose() => _stageController.close();
+  void dispose() {
+    _stageController.close();
+    _traceController.close();
+  }
 }

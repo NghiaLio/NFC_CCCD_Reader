@@ -1,19 +1,26 @@
 import 'dart:typed_data';
 
+import 'nfc_warning.dart';
 import '../enums/aa_evidence_status.dart';
 import '../enums/nfc_gender.dart';
 
 /// Kết quả đọc chip MRTD — toàn bộ field nullable vì phụ thuộc Data Group
 /// thực tế thẻ công bố, không phải mọi field đều luôn có.
+///
+/// **Không kèm string hiển thị**: app tự map enum/mã (ví dụ [gender],
+/// [nationality], [NfcWarning.type]) sang ngôn ngữ riêng.
 class NfcReadResult {
+  /// ID phiên đọc — chung với mọi `NfcTraceEvent` của lượt quét này, dùng để
+  /// nhóm log trong hệ thống phía trên.
+  final String sessionId;
+
   final String? idNumber;
   final String? fullName;
   final DateTime? dateOfBirth;
   final DateTime? dateOfExpiry;
   final NfcGender? gender;
 
-  /// Mã quốc tịch ICAO alpha-3 (VD: `'VNM'`) — dùng extension
-  /// `nationalityLabel` (xem `nfc_nationality_x.dart`) để lấy nhãn hiển thị.
+  /// Mã quốc tịch ICAO alpha-3 (VD: `'VNM'`) — app tự map sang nhãn hiển thị.
   final String? nationality;
   final Uint8List? faceImageBytes;
 
@@ -47,10 +54,12 @@ class NfcReadResult {
   /// v1 — luôn `false`. Không suy luận `true` chỉ vì đã đọc được EF.SOD.
   final bool isChipAuthenticityVerified;
 
-  /// Cảnh báo không-fatal trong quá trình đọc (DG công bố nhưng đọc lỗi...).
-  final List<String> warnings;
+  /// Cảnh báo không-fatal trong quá trình đọc, dạng cấu trúc (không string
+  /// hiển thị) — app tự map [NfcWarning.type].
+  final List<NfcWarning> warnings;
 
   const NfcReadResult({
+    required this.sessionId,
     this.idNumber,
     this.fullName,
     this.dateOfBirth,

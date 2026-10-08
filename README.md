@@ -10,7 +10,8 @@ Package không kèm giao diện. Ứng dụng tự xây màn hình nhập CCCD/C
 - Đọc CCCD gắn chip Việt Nam bằng PACE, với CAN là 6 số cuối của CCCD.
 - Đọc DG1 (thông tin MRZ), DG2 (ảnh khuôn mặt), DG13 (dữ liệu mở rộng CCCD), DG15 và bằng chứng Active Authentication khi thẻ hỗ trợ.
 - Báo tiến trình đọc bằng callback hoặc `Stream`.
-- Chuẩn hóa lỗi NFC thành `NfcFailure` để app không cần xử lý exception thô từ native/MRTD.
+- Tracing từng bước đọc qua `traceStream` (breadcrumb + SW1/SW2, đã sanitize) để log/đẩy lên Sentry/Crashlytics.
+- Chuẩn hóa lỗi NFC thành `NfcFailure` (kèm `errorDetails` SW1/SW2) để app không cần xử lý exception thô từ native/MRTD.
 - Hỗ trợ `NfcRepository` để mock hoặc dependency injection trong test.
 
 > BAC cho hộ chiếu/giấy tờ quốc tế đã có API đầu vào nhưng hiện chưa được triển khai; lệnh đọc sẽ trả về `NfcFailureType.bacFailed`.
@@ -124,8 +125,11 @@ Trong Xcode, bật capability **Near Field Communication Tag Reading** cho targe
 ## Sử dụng nhanh
 
 ```dart
-final reader = NfcCccdReader(
-  logSink: (message) => debugPrint('[NFC] $message'),
+final reader = NfcCccdReader();
+
+// Tracing: hứng breadcrumb đã sanitize, gom thêm OS/model rồi đẩy lên Sentry.
+final traceSub = reader.traceStream.listen(
+  (e) => debugPrint('[${e.sessionId}] ${e.step.name} sw=${e.sw1} ${e.sw2}'),
 );
 
 try {
@@ -141,11 +145,13 @@ try {
     },
   );
 
-  debugPrint(result.fullName);
-  debugPrint(result.idNumber);
+  // App tự map enum/mã sang ngôn ngữ riêng; KHÔNG in PII thật vào log.
+  debugPrint('Đã đọc, sessionId=${result.sessionId}');
 } on NfcFailure catch (error) {
-  debugPrint(error.type.displayMessage);
+  // App tự map error.type sang thông điệp i18n của mình.
+  debugPrint('Lỗi ${error.type} (session ${error.sessionId}): ${error.errorDetails}');
 } finally {
+  await traceSub.cancel();
   reader.dispose();
 }
 ```
@@ -171,12 +177,29 @@ try {
 
 Các mốc tiến trình gồm: `waitingForCard`, `authenticating`, `reading`, và `validating`.
 
+### Tracing chi tiết (breadcrumb + SW1/SW2)
+
+Ngoài `stageStream` (mốc thô cho progress bar), `traceStream` phát mỗi bước đọc một
+`NfcTraceEvent` kèm `sessionId`, status word APDU (SW1/SW2), độ dài byte và chi tiết đã
+sanitize (không PII). Dùng cho log/Sentry/Crashlytics — xem [API.md](API.md) mục
+*Tracing & observability*.
+
+```dart
+final sub = reader.traceStream.listen(
+  (e) => debugPrint('[${e.sessionId}] ${e.step.name} sw=${e.sw1} ${e.sw2} '
+      'bytes=${e.dataLengthBytes} ${e.detail}'),
+);
+// ... đọc ...
+await sub.cancel();
+```
+
 ## Dữ liệu trả về
 
 `read()` trả về `NfcReadResult`. Một số trường phổ biến:
 
 | Trường | Nội dung |
 |---|---|
+| `sessionId` | Định danh phiên đọc; khớp với event trong `traceStream`. |
 | `idNumber` | Số định danh từ DG1/MRZ. |
 | `fullName` | Họ tên từ DG1/MRZ. |
 | `dateOfBirth`, `dateOfExpiry` | Ngày sinh và ngày hết hạn. |
@@ -184,7 +207,7 @@ Các mốc tiến trình gồm: `waitingForCard`, `authenticating`, `reading`, v
 | `faceImageBytes` | Bytes ảnh khuôn mặt từ DG2. |
 | `extendedData` | Dữ liệu đặc thù DG13, ví dụ quê quán, dân tộc, tôn giáo, thông tin gia đình và nơi thường trú. |
 | `aaChallenge`, `aaSignature`, `aaPublicKeyBytes` | Bằng chứng Active Authentication để backend hoặc bên thứ ba xác minh. |
-| `warnings` | Cảnh báo không-fatal khi không đọc được một phần dữ liệu. |
+| `warnings` | Danh sách `NfcWarning` (structured: `NfcWarningType` + detail) cho cảnh báo không-fatal; app tự map nhãn. |
 
 Không phải mọi thẻ đều công bố đầy đủ Data Group; các trường tương ứng có thể là `null` mà không làm thất bại toàn bộ phiên đọc.
 
@@ -200,7 +223,7 @@ Mọi lỗi của luồng đọc được đưa về `NfcFailure` với `NfcFail
 | Dữ liệu | `dgMissing` |
 | Khác | `unknown` |
 
-Có thể dùng `error.type.displayMessage` để lấy thông điệp tiếng Việt mặc định, hoặc `error.type.isRecoverable` để quyết định có nên cho người dùng thử lại.
+Package **không** kèm thông điệp mặc định — app tự map `NfcFailureType` sang thông điệp theo ngôn ngữ riêng (i18n). Dùng `error.type.isRecoverable` để quyết định có nên cho người dùng thử lại ngay, và `error.errorDetails` (SW1/SW2, `rootCause`, `detail`) để log/diagnose.
 
 ## Xử lý sự cố
 
@@ -219,7 +242,7 @@ Có thể dùng `error.type.displayMessage` để lấy thông điệp tiếng V
 
 ## Lưu ý bảo mật và giới hạn
 
-- Không ghi CCCD, CAN, ảnh khuôn mặt hoặc dữ liệu PII thật vào log. `logSink` của package chỉ nhận thông tin đã được ẩn danh.
+- Không ghi CCCD, CAN, ảnh khuôn mặt hoặc dữ liệu PII thật vào log. `traceStream` và `NfcErrorDetails` của package chỉ chứa metadata đã sanitize (bước, SW1/SW2, độ dài byte, mã lỗi) — không có giá trị PII.
 - Ứng dụng nên che số định danh khi hiển thị, ví dụ chỉ giữ ba số đầu và ba số cuối.
 - Package chỉ thu thập bằng chứng Active Authentication; không tự xác minh chữ ký đó.
 - Passive Authentication (xác minh SOD/chuỗi CSCA) chưa được triển khai, nên `isChipAuthenticityVerified` hiện luôn là `false`.

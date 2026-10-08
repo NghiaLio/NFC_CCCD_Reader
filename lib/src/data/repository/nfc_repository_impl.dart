@@ -2,6 +2,7 @@ import 'package:flutter_nfc_kit/flutter_nfc_kit.dart';
 
 import '../../domain/entities/nfc_read_input.dart';
 import '../../domain/entities/nfc_read_result.dart';
+import '../../domain/entities/nfc_trace_event.dart';
 import '../../domain/enums/nfc_availability_status.dart';
 import '../../domain/enums/nfc_read_stage.dart';
 import '../../domain/repository/nfc_repository.dart';
@@ -27,8 +28,9 @@ class NfcRepositoryImpl implements NfcRepository {
   Future<NfcReadResult> readChip(
     NfcReadInput input, {
     void Function(NfcReadStage stage)? onStage,
+    void Function(NfcTraceEvent event)? onTrace,
   }) {
-    return _chipReaderService.read(input, onStage: onStage);
+    return _chipReaderService.read(input, onStage: onStage, onTrace: onTrace);
   }
 
   @override

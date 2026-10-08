@@ -4,6 +4,10 @@ import '../enums/nfc_session_mode.dart';
 /// (document number + DOB + DOE, cho giấy tờ quốc tế). Không có giá trị mặc
 /// định nào nguy hiểm — chỉ tạo được từ dữ liệu người dùng nhập, factory
 /// throw ngay nếu input không hợp lệ (fail fast tại boundary).
+///
+/// Validation lỗi ném `ArgumentError` mang **tên trường lỗi** qua `.name`
+/// (`can`, `cccdNumber`, `documentNumber`). Package không kèm thông điệp UI —
+/// app tự map `.name` sang thông điệp bằng ngôn ngữ riêng.
 class NfcReadInput {
   final NfcSessionMode mode;
   final String? can;
@@ -21,7 +25,7 @@ class NfcReadInput {
 
   factory NfcReadInput.pace({required String can}) {
     if (!isValidCan(can)) {
-      throw ArgumentError.value(can, 'can', 'CAN phải gồm đúng 6 chữ số');
+      throw ArgumentError.value(can, 'can');
     }
     return NfcReadInput._(mode: NfcSessionMode.pace, can: can);
   }
@@ -31,11 +35,7 @@ class NfcReadInput {
   /// dùng nhập đúng thứ họ có sẵn (số CCCD) thay vì phải tự tách 6 số cuối.
   factory NfcReadInput.paceFromCccdNumber(String cccdNumber) {
     if (!isValidCccdNumber(cccdNumber)) {
-      throw ArgumentError.value(
-        cccdNumber,
-        'cccdNumber',
-        'Số CCCD phải gồm đúng 12 chữ số',
-      );
+      throw ArgumentError.value(cccdNumber, 'cccdNumber');
     }
     return NfcReadInput.pace(can: cccdNumber.substring(cccdNumber.length - 6));
   }
@@ -46,11 +46,7 @@ class NfcReadInput {
     required DateTime dateOfExpiry,
   }) {
     if (documentNumber.trim().isEmpty) {
-      throw ArgumentError.value(
-        documentNumber,
-        'documentNumber',
-        'Số giấy tờ không được để trống',
-      );
+      throw ArgumentError.value(documentNumber, 'documentNumber');
     }
     return NfcReadInput._(
       mode: NfcSessionMode.bac,

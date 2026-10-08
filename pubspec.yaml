@@ -3,7 +3,7 @@ description: >
   Đọc dữ liệu CCCD gắn chip / hộ chiếu điện tử (ICAO 9303 MRTD) qua NFC:
   PACE (CCCD Việt Nam), BAC (giấy tờ quốc tế), DG1 (MRZ), DG2 (ảnh),
   DG13 (dữ liệu mở rộng CCCD VN), DG15 + Active Authentication.
-version: 0.1.1
+version: 0.2.0
 publish_to: 'none' # đổi khi thật sự publish lên pub.dev/private registry
 
 environment:

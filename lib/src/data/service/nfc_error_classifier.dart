@@ -1,57 +1,85 @@
 import 'package:dmrtd/dmrtd.dart';
 
+import '../../domain/entities/nfc_error_details.dart';
 import '../../domain/entities/nfc_failure.dart';
 import '../../domain/enums/nfc_failure_type.dart';
+import '../../domain/enums/nfc_read_stage.dart';
 
-/// Map exception từ dmrtd sang [NfcFailure]. Tách riêng khỏi service đọc chip
+/// Map exception từ dmrtd sang [NfcFailure] kèm [NfcErrorDetails] (metadata:
+/// SW1/SW2, root cause, chi tiết đã sanitize). Tách riêng khỏi service đọc chip
 /// để test được logic phân loại KHÔNG CẦN thiết bị NFC thật — đây là vùng đã
-/// gây 3 bug thật trong quá trình phát triển bản gốc (xem comment từng
-/// nhánh bên dưới), chỉ phát hiện được qua test thiết bị vì trước đó không
-/// có unit test cho phần này.
+/// gây 3 bug thật trong quá trình phát triển bản gốc (xem comment từng nhánh),
+/// chỉ phát hiện được qua test thiết bị vì trước đó không có unit test.
+///
+/// [NfcErrorDetails.detail] ở đây chỉ chứa text giao thức/technical từ luồng
+/// xác thực (PACE) — KHÔNG phải nội dung dữ liệu thẻ (MRZ/tên/ảnh), nên an
+/// toàn để log. Không dùng string hiển thị.
 class NfcErrorClassifier {
   const NfcErrorClassifier._();
 
-  static const _tagLostMessage = 'Mất kết nối với thẻ giữa chừng';
+  static const _maxDetailLength = 200;
+  static const _tagLostRootCause = 'ComProviderError/NfcProviderError';
 
-  static NfcFailure tagLost() =>
-      const NfcFailure(NfcFailureType.tagLost, message: _tagLostMessage);
+  static NfcFailure tagLost({String? rootCause, NfcReadStage? stage}) =>
+      NfcFailure(
+        NfcFailureType.tagLost,
+        errorDetails: NfcErrorDetails(
+          stage: stage,
+          rootCause: rootCause ?? _tagLostRootCause,
+        ),
+      );
 
-  static NfcFailure fromPassportError(PassportError e) {
+  static NfcFailure fromPassportError(PassportError e, {NfcReadStage? stage}) {
+    final code = e.code;
+    final details = NfcErrorDetails(
+      sw1: code?.sw1,
+      sw2: code?.sw2,
+      stage: stage,
+      rootCause: 'PassportError',
+      detail: _safeDetail(e.message),
+    );
     if (_isAuthFailedStatus(e)) {
-      return const NfcFailure(NfcFailureType.wrongCan);
+      return NfcFailure(NfcFailureType.wrongCan, errorDetails: details);
     }
-    if (isTagLostError(e)) return tagLost();
-    return NfcFailure(NfcFailureType.paceFailed, message: e.message);
+    if (isTagLostError(e)) {
+      return NfcFailure(NfcFailureType.tagLost, errorDetails: details);
+    }
+    return NfcFailure(NfcFailureType.paceFailed, errorDetails: details);
   }
 
   /// BUG THẬT #1 đã gặp: khi CAN sai, dmrtd KHÔNG ném `PassportError` như
-  /// dartdoc mô tả, mà ném `PACEError` ("Auth token from ICC and terminal
-  /// are not the same") — 1 nhóm exception PACE riêng, ném thẳng từ
-  /// `PACE.initSession`, không đi qua lớp bọc `PassportError` thông thường,
-  /// và cũng KHÔNG được dmrtd export public (giống tình huống `CanKey`).
-  /// Nếu chỉ bắt `on PassportError`, lỗi này thoát ra ngoài dạng chưa xác
-  /// định → bị nuốt hoàn toàn ở tầng gọi, người dùng không thấy thông báo gì.
-  /// Đây là catch-all cuối chuỗi: tới được điểm gọi hàm này nghĩa là đã đọc
-  /// EF.CardAccess thành công, nên lỗi PACE còn lại gần như luôn là CAN sai.
-  static NfcFailure fromGenericException(Object e) {
-    // BUG THẬT #2 đã gặp: catch-all ở trên có lỗ hổng — MỌI bước PACE trong
-    // dmrtd (step 0-4 và wrapper ngoài cùng) đều tự bọc
+  /// dartdoc mô tả, mà ném `PACEError` ("Auth token from ICC and terminal are
+  /// not the same") — 1 nhóm exception PACE riêng, ném thẳng từ `PACE.initSession`,
+  /// không đi qua lớp bọc `PassportError`, và cũng KHÔNG được dmrtd export
+  /// public (giống tình huống `CanKey`). Nếu chỉ bắt `on PassportError`, lỗi
+  /// này thoát ra ngoài dạng chưa xác định → bị nuốt ở tầng gọi. Đây là
+  /// catch-all cuối chuỗi: tới được đây nghĩa là đã đọc EF.CardAccess thành
+  /// công, nên lỗi PACE còn lại gần như luôn là CAN sai.
+  static NfcFailure fromGenericException(Object e, {NfcReadStage? stage}) {
+    // BUG THẬT #2 đã gặp: MỌI bước PACE trong dmrtd đều tự bọc
     // `try { ... } on Exception catch (e) { throw PACEError("...: $e"); }`
-    // quanh chính transceive APDU. Nếu rút thẻ giữa lúc đang trao đổi APDU
-    // trong PACE, lỗi mất kết nối thật (`ComProviderError`/`NfcProviderError`)
-    // bị chính dmrtd bắt và ném lại thành `PACEError`, xoá mất type gốc.
-    // Giả định "tới bước PACE thì lỗi còn lại luôn là CAN sai" SAI trong
-    // trường hợp này. Giải pháp: `$e` trong dmrtd nội suy chuỗi lỗi gốc vào
-    // message, nên `PACEError.toString()` vẫn còn chứa TÊN CLASS gốc dù đã
-    // bị bọc — dùng string-match tên class (không phải mã lỗi giao thức thô)
-    // để khôi phục đúng type trước khi map.
-    if (isTagLostError(e)) return tagLost();
-    return NfcFailure(NfcFailureType.wrongCan, message: e.toString());
+    // quanh transceive APDU. Nếu rút thẻ giữa lúc trao đổi APDU trong PACE, lỗi
+    // mất kết nối thật (`ComProviderError`/`NfcProviderError`) bị dmrtd bắt và
+    // ném lại thành `PACEError`, xoá mất type gốc. `$e` trong dmrtd nội suy
+    // chuỗi lỗi gốc vào message, nên tên class gốc vẫn còn trong
+    // `PACEError.toString()` — dùng string-match tên class (không phải mã giao
+    // thức thô) để khôi phục đúng type trước khi map.
+    if (isTagLostError(e)) {
+      return tagLost(rootCause: _rootCauseOf(e), stage: stage);
+    }
+    return NfcFailure(
+      NfcFailureType.wrongCan,
+      errorDetails: NfcErrorDetails(
+        stage: stage,
+        rootCause: _rootCauseOf(e),
+        detail: _safeDetail(e.toString()),
+      ),
+    );
   }
 
-  // sw=6300 = PACE auth token mismatch (sai CAN) — status word ISO 7816,
-  // so trực tiếp field public thay vì string-match, vì `StatusWord` cũng
-  // không được dmrtd export public.
+  // sw=6300 = PACE auth token mismatch (sai CAN) — status word ISO 7816, so
+  // trực tiếp field public thay vì string-match, vì `StatusWord` cũng không
+  // được dmrtd export public.
   static bool _isAuthFailedStatus(PassportError e) {
     final code = e.code;
     return code != null && code.sw1 == 0x63 && code.sw2 == 0x00;
@@ -59,8 +87,8 @@ class NfcErrorClassifier {
 
   /// BUG THẬT #3 đã gặp: ban đầu chỉ kiểm tra `e is ComProviderError`, không
   /// tính tới việc dmrtd bọc lỗi mất kết nối vào exception khác (xem
-  /// [fromGenericException]) — chỉ còn thấy tên class gốc qua nội suy chuỗi
-  /// trong message, không phải string-match mã lỗi giao thức thô.
+  /// [fromGenericException]) — chỉ còn thấy tên class gốc qua nội suy chuỗi,
+  /// không phải string-match mã lỗi giao thức thô.
   static bool isTagLostError(Object e) {
     if (e is ComProviderError || e is NfcProviderError) return true;
     final msg = e.toString().toLowerCase();
@@ -71,5 +99,26 @@ class NfcErrorClassifier {
         msg.contains('transceive') ||
         msg.contains('session invalidated') ||
         msg.contains('disconnected');
+  }
+
+  /// Tên class/type của lỗi GỐC (đã bị dmrtd bọc) — dùng cho
+  /// [NfcErrorDetails.rootCause]. Không chứa PII.
+  static String _rootCauseOf(Object e) {
+    final msg = e.toString().toLowerCase();
+    if (msg.contains('comprovidererror')) return 'ComProviderError';
+    if (msg.contains('nfcprovidererror')) return 'NfcProviderError';
+    if (msg.contains('paceerror')) return 'PACEError';
+    if (msg.contains('passporterror')) return 'PassportError';
+    return e.runtimeType.toString();
+  }
+
+  /// Giới hạn độ dài chi tiết để an toàn khi log (chống chuỗi quá dài).
+  static String? _safeDetail(String? value) {
+    if (value == null) return null;
+    final s = value.trim();
+    if (s.isEmpty) return null;
+    return s.length > _maxDetailLength
+        ? '${s.substring(0, _maxDetailLength)}…'
+        : s;
   }
 }
