@@ -103,7 +103,7 @@ class NfcChipReaderService {
 
       stage = NfcReadStage.reading;
       onStage?.call(stage);
-      final result = await _readDeclaredDataGroups(passport, efCom, trace);
+      final result = await _readDeclaredDataGroups(passport, efCom, trace, input);
 
       stage = NfcReadStage.validating;
       onStage?.call(stage);
@@ -189,9 +189,24 @@ class NfcChipReaderService {
     Passport passport,
     EfCOM efCom,
     _TraceSession trace,
+    NfcReadInput input,
   ) async {
     final warnings = <NfcWarning>[];
     final identity = await _readIdentity(passport, efCom, warnings, trace);
+
+    if (input.cccdNumber != null && identity.idNumber != null) {
+      if (input.cccdNumber != identity.idNumber) {
+        throw const NfcFailure(
+          NfcFailureType.wrongCan,
+          errorDetails: NfcErrorDetails(
+            stage: NfcReadStage.validating,
+            rootCause: 'CccdNumberMismatch',
+            detail: 'Input CCCD number does not match idNumber from DG1',
+          ),
+        );
+      }
+    }
+
     final faceImageBytes =
         await _readFaceImage(passport, efCom, warnings, trace);
     final extendedData = await _readExtendedData(passport, efCom, warnings, trace);

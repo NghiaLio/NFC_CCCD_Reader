@@ -12,6 +12,7 @@ class NfcReadInput {
   final NfcSessionMode mode;
   final String? can;
   final String? documentNumber;
+  final String? cccdNumber;
   final DateTime? dateOfBirth;
   final DateTime? dateOfExpiry;
 
@@ -19,6 +20,7 @@ class NfcReadInput {
     required this.mode,
     this.can,
     this.documentNumber,
+    this.cccdNumber,
     this.dateOfBirth,
     this.dateOfExpiry,
   });
@@ -37,7 +39,11 @@ class NfcReadInput {
     if (!isValidCccdNumber(cccdNumber)) {
       throw ArgumentError.value(cccdNumber, 'cccdNumber');
     }
-    return NfcReadInput.pace(can: cccdNumber.substring(cccdNumber.length - 6));
+    return NfcReadInput._(
+      mode: NfcSessionMode.pace,
+      can: cccdNumber.substring(cccdNumber.length - 6),
+      cccdNumber: cccdNumber,
+    );
   }
 
   factory NfcReadInput.bac({

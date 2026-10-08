@@ -96,7 +96,7 @@ reader.traceStream.listen((e) {
 | Factory / helper | Mô tả |
 |---|---|
 | `NfcReadInput.pace(can: String)` | Tạo phiên PACE; `can` phải có đúng 6 chữ số. |
-| `NfcReadInput.paceFromCccdNumber(String cccdNumber)` | Tạo phiên PACE từ CCCD 12 số; package tự lấy 6 số cuối làm CAN. |
+| `NfcReadInput.paceFromCccdNumber(String cccdNumber)` | Tạo phiên PACE từ CCCD 12 số; package dùng 6 số cuối làm CAN và tự động xác thực chéo (cross-verify) 12 số này với ID thật trên chip. |
 | `NfcReadInput.bac(documentNumber:, dateOfBirth:, dateOfExpiry:)` | Tạo input BAC cho giấy tờ ICAO. BAC hiện là stub và khi đọc sẽ trả lỗi `bacFailed`. |
 | `NfcReadInput.isValidCan(String)` | Kiểm tra CAN gồm đúng 6 chữ số. |
 | `NfcReadInput.isValidCccdNumber(String)` | Kiểm tra số CCCD gồm đúng 12 chữ số. |

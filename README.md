@@ -156,7 +156,7 @@ try {
 }
 ```
 
-CCCD Việt Nam không in CAN riêng. Dùng `NfcReadInput.paceFromCccdNumber()` với đúng 12 chữ số CCCD; package sẽ lấy 6 số cuối làm CAN.
+CCCD Việt Nam không in CAN riêng. Dùng `NfcReadInput.paceFromCccdNumber()` với đúng 12 chữ số CCCD; package sẽ lấy 6 số cuối làm CAN để mở khóa, sau đó tự động đối chiếu (cross-verify) toàn bộ 12 số này với dữ liệu gốc trên chip để chống nhập sai.
 
 ## Theo dõi tiến trình bằng Stream
 
@@ -231,7 +231,7 @@ Package **không** kèm thông điệp mặc định — app tự map `NfcFailur
 |---|---|
 | `checkAvailability()` trả `disabled` / `notSupported` | NFC đang tắt hoặc thiết bị không hỗ trợ — hướng dẫn người dùng bật NFC. |
 | Lỗi `timeout` | Chưa nhận thấy thẻ trong thời gian chờ (mặc định 20s). Giữ thẻ sát vùng NFC rồi thử lại; có thể tăng `connectTimeout` khi tạo `NfcCccdReader`. |
-| Lỗi `wrongCan` | Số CCCD/CAN nhập sai. Kiểm tra lại số CCCD 12 số (hoặc 6 số CAN). |
+| Lỗi `wrongCan` | Số CCCD/CAN nhập sai, hoặc 12 số CCCD nhập vào không khớp với dữ liệu thật trên chip. |
 | Lỗi `paceFailed` | Thiết lập phiên PACE thất bại. Xem ghi chú **Tương thích thẻ** bên dưới. |
 | Lỗi `tagLost` | Rút thẻ giữa chừng. Giữ yên thẻ đến khi đọc xong. |
 | `faceImageBytes` / `extendedData` là `null` | Thẻ không công bố DG2/DG13 — xem `warnings`. Đây không phải lỗi. |
