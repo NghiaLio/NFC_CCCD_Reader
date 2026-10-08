@@ -15,6 +15,19 @@ Package không kèm giao diện. Ứng dụng tự xây màn hình nhập CCCD/C
 
 > BAC cho hộ chiếu/giấy tờ quốc tế đã có API đầu vào nhưng hiện chưa được triển khai; lệnh đọc sẽ trả về `NfcFailureType.bacFailed`.
 
+## Tích hợp vào project
+
+Package chỉ lo **đọc chip + trả dữ liệu**. UI nhập CCCD, xác minh danh tính, liveness/so khớp khuôn mặt, đối chiếu cơ sở dữ liệu, thu consent và lưu trữ đều do **ứng dụng/hệ thống phía trên** tự triển khai — package không tự làm, không tự xác minh, và không gửi dữ liệu ra mạng.
+
+Thứ tự tích hợp:
+
+1. Thêm dependency + `flutter pub get` (mục Cài đặt).
+2. Khai báo native — Cấu hình Android và/hoặc Cấu hình iOS (bắt buộc, không khai báo sẽ không đọc được thẻ).
+3. Trong code: `checkAvailability()` → `read(input, onStage: ...)` → dùng `NfcReadResult`, bắt `NfcFailure`, rồi `dispose()` (mục Sử dụng nhanh).
+4. Nếu quy trình cần xác minh, chuyển `aaChallenge`/`aaSignature`/`aaPublicKeyBytes` (cùng ảnh DG2 và dữ liệu DG1/DG13) cho hệ thống phía trên để xử lý.
+
+> **Lưu ý trọng tâm:** package trả dữ liệu **đã parse** + bằng chứng **Active Authentication**. Nó **chưa trả raw bytes SOD/các DG**, nên hệ thống phía trên **không làm được Passive Authentication** với output hiện tại — chỉ verify được AA. Nếu quy trình bắt buộc cần PA, cần bổ sung raw data (xem mục Lưu ý bảo mật và giới hạn).
+
 ## Cài đặt
 
 ```yaml
@@ -25,16 +38,18 @@ dependencies:
       ref: main
 ```
 
-Để bảo đảm build lặp lại được, nên thay `main` bằng tag phát hành hoặc commit
-SHA cố định khi tích hợp production:
+Để bảo đảm build lặp lại được, nên pin bằng **tag phát hành** (khuyến nghị) hoặc
+commit SHA cố định khi tích hợp production, thay vì `main`:
 
 ```yaml
 dependencies:
   nfc_cccd_reader:
     git:
       url: https://github.com/NghiaLio/NFC_CCCD_Reader.git
-      ref: cdcf2cc435cc016c4a5a955103d926ccacd125cf
+      ref: v0.1.1   # hoặc một commit SHA cố định
 ```
+
+> Giao thức MRTD (`dmrtd`) được **vendored trong repo này** tại `third_party/dmrtd`. Khi pin package, toàn bộ `dmrtd` cũng được cố định theo — bạn **không cần** (và không nên) khai báo `dmrtd` riêng trong app.
 
 Sau khi cập nhật `pubspec.yaml`, chạy:
 
@@ -187,6 +202,21 @@ Mọi lỗi của luồng đọc được đưa về `NfcFailure` với `NfcFail
 
 Có thể dùng `error.type.displayMessage` để lấy thông điệp tiếng Việt mặc định, hoặc `error.type.isRecoverable` để quyết định có nên cho người dùng thử lại.
 
+## Xử lý sự cố
+
+| Triệu chứng | Nguyên nhân / cách xử lý |
+|---|---|
+| `checkAvailability()` trả `disabled` / `notSupported` | NFC đang tắt hoặc thiết bị không hỗ trợ — hướng dẫn người dùng bật NFC. |
+| Lỗi `timeout` | Chưa nhận thấy thẻ trong thời gian chờ (mặc định 20s). Giữ thẻ sát vùng NFC rồi thử lại; có thể tăng `connectTimeout` khi tạo `NfcCccdReader`. |
+| Lỗi `wrongCan` | Số CCCD/CAN nhập sai. Kiểm tra lại số CCCD 12 số (hoặc 6 số CAN). |
+| Lỗi `paceFailed` | Thiết lập phiên PACE thất bại. Xem ghi chú **Tương thích thẻ** bên dưới. |
+| Lỗi `tagLost` | Rút thẻ giữa chừng. Giữ yên thẻ đến khi đọc xong. |
+| `faceImageBytes` / `extendedData` là `null` | Thẻ không công bố DG2/DG13 — xem `warnings`. Đây không phải lỗi. |
+| Build fail liên quan `archive` | Nếu app có package khác ép `archive` xuống <4, thêm `dependency_overrides: archive: ^4.0.9` vào **pubspec của app** (override trong package này không áp dụng cho consumer). |
+| iOS không đọc được thẻ | Kiểm tra AID `A0000002471001` trong `Info.plist`, `TAG` trong `Runner.entitlements`, và capability NFC đã bật trong Xcode. |
+
+**Tương thích thẻ (quan trọng):** PACE trong package dùng **EF.CardAccess cố định** phù hợp với thẻ CCCD gắn chip Việt Nam. Nếu cần hỗ trợ thẻ/lô khác có EF.CardAccess khác, lệnh đọc có thể trả `paceFailed`/`wrongCan` dù số CCCD đúng — lúc đó cần hiệu chỉnh EF.CardAccess theo thẻ.
+
 ## Lưu ý bảo mật và giới hạn
 
 - Không ghi CCCD, CAN, ảnh khuôn mặt hoặc dữ liệu PII thật vào log. `logSink` của package chỉ nhận thông tin đã được ẩn danh.
@@ -194,7 +224,7 @@ Có thể dùng `error.type.displayMessage` để lấy thông điệp tiếng V
 - Package chỉ thu thập bằng chứng Active Authentication; không tự xác minh chữ ký đó.
 - Passive Authentication (xác minh SOD/chuỗi CSCA) chưa được triển khai, nên `isChipAuthenticityVerified` hiện luôn là `false`.
 - Một Data Group đọc lỗi sẽ được ghi vào `warnings` khi có thể; mất kết nối thẻ thực sự vẫn làm phiên đọc thất bại.
-- Cấu hình iOS chưa được xác minh trên thiết bị thật trong repository này.
+- Luồng đọc end-to-end đã được kiểm chứng trên thẻ CCCD gắn chip thật. Tỷ lệ đọc thành công phụ thuộc vị trí ăng-ten NFC và từng dòng máy, nên trước khi phát hành hãy tự kiểm thử trên tập thiết bị mục tiêu (nhiều dòng Android + iOS).
 - Giao thức MRTD (PACE/AA/Secure Messaging) được **vendored** tại `third_party/dmrtd` (fork `HVLoc/dmrtd`, branch `flutter/3.41.1`, commit `4300157`) để tự kiểm soát, audit và patch được code. Chạy test riêng: `cd third_party/dmrtd && flutter test`.
 - License của `dmrtd` là **dual: LGPL v3 / Commercial** (file `LICENSE.LGPL` + `LICENSE.COMMERCIAL` trong `third_party/dmrtd`). Nếu bạn **modify** code dmrtd thì phần sửa phải được chia sẻ theo LGPL; nếu dùng **thương mại** và không muốn ràng buộc LGPL thì liên hệ mua license Commercial. Rà soát trước khi phát hành.
 
@@ -209,4 +239,4 @@ Chạy unit test:
 flutter test
 ```
 
-Đọc NFC end-to-end vẫn cần thiết bị hỗ trợ NFC và CCCD/thẻ thật để kiểm chứng.
+Để tự kiểm chứng trên thiết bị/thẻ cụ thể, chạy sample app trong `example/` (cần thiết bị NFC + thẻ CCCD thật).
