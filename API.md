@@ -111,7 +111,8 @@ Kết quả của `read()`. Các trường dữ liệu thẻ có thể là `null
 |---|---|---|
 | `sessionId` | `String` | Định danh phiên đọc (khớp với `traceStream`). |
 | `idNumber` | `String?` | Số định danh từ DG1/MRZ. |
-| `fullName` | `String?` | Họ tên từ DG1/MRZ. |
+| `fullName` | `String?` | Họ tên từ DG1/MRZ (chuẩn ICAO, không dấu). Nguồn chính. |
+| `fullNameWithDiacritics` | `String?` | Tên có dấu từ DG13 field 2 (ví dụ `NGUYỄN VĂN ANH`); fallback về `fullName` khi DG13 không cung cấp. |
 | `dateOfBirth` | `DateTime?` | Ngày sinh từ DG1/MRZ. |
 | `dateOfExpiry` | `DateTime?` | Ngày hết hạn từ DG1/MRZ. |
 | `gender` | `NfcGender?` | Giới tính đã chuẩn hóa. App tự map nhãn. |

@@ -41,6 +41,10 @@ typedef _AaEvidence = ({
   AaEvidenceStatus status,
 });
 
+/// Kết quả đọc DG13: [data] = extendedData (key tiếng Anh), [fullName] =
+/// field 2 (tên, có thể kèm dấu) tách riêng. Cả hai `null` nếu không đọc được.
+typedef _Dg13Data = ({Map<String, String>? data, String? fullName});
+
 /// Đọc 1 phiên chip MRTD: connect → PACE/BAC → EF.COM → DG1/DG2/DG13/DG15+AA,
 /// tất cả trong cùng 1 lần chạm thẻ.
 ///
@@ -209,19 +213,20 @@ class NfcChipReaderService {
 
     final faceImageBytes =
         await _readFaceImage(passport, efCom, warnings, trace);
-    final extendedData = await _readExtendedData(passport, efCom, warnings, trace);
+    final dg13 = await _readExtendedData(passport, efCom, warnings, trace);
     final aa = await _readAaEvidence(passport, efCom, warnings, trace);
 
     return NfcReadResult(
       sessionId: trace.sessionId,
       idNumber: identity.idNumber,
       fullName: identity.fullName,
+      fullNameWithDiacritics: dg13.fullName ?? identity.fullName,
       dateOfBirth: identity.dateOfBirth,
       dateOfExpiry: identity.dateOfExpiry,
       gender: identity.gender,
       nationality: identity.nationality,
       faceImageBytes: faceImageBytes,
-      extendedData: extendedData,
+      extendedData: dg13.data,
       aaChallenge: aa.challenge,
       aaSignature: aa.signature,
       aaPublicKeyBytes: aa.publicKeyBytes,
@@ -246,7 +251,9 @@ class NfcChipReaderService {
     }
     try {
       final mrz = (await passport.readEfDG1()).mrz;
-      final fullName = '${mrz.firstName} ${mrz.lastName}'.trim();
+      // MRZ (ICAO) luôn lưu họ trước, tên sau (surname<<given). Đưa họ ra
+      // trước để khớp thứ tự hiển thị tiếng Việt: "NGUYEN VAN ANH".
+      final fullName = '${mrz.lastName} ${mrz.firstName}'.trim();
       // CCCD Việt Nam dùng MRZ chuẩn TD1: số định danh nằm ở 12 ký tự đầu
       // của optionalData, KHÔNG phải documentNumber.
       final optionalData = mrz.optionalData;
@@ -300,21 +307,24 @@ class NfcChipReaderService {
     }
   }
 
-  Future<Map<String, String>?> _readExtendedData(
+  Future<_Dg13Data> _readExtendedData(
     Passport passport,
     EfCOM efCom,
     List<NfcWarning> warnings,
     _TraceSession trace,
   ) async {
     trace.emit(NfcTraceStep.readDg13);
-    if (!efCom.dgTags.contains(EfDG13.TAG)) return null;
+    if (!efCom.dgTags.contains(EfDG13.TAG)) {
+      return (data: null, fullName: null);
+    }
     try {
       final rawBytes = (await passport.readEfDG13()).toBytes();
-      final extendedData = NfcDg13Parser.parse(rawBytes);
-      if (extendedData.isEmpty) {
+      final parsed = NfcDg13Parser.parseAll(rawBytes);
+      final extendedData = parsed.data;
+      if (extendedData.isEmpty && parsed.fullName == null) {
         warnings.add(const NfcWarning(NfcWarningType.dg13Empty));
       }
-      return extendedData;
+      return (data: extendedData, fullName: parsed.fullName);
     } catch (e) {
       if (NfcErrorClassifier.isTagLostError(e)) {
         throw NfcErrorClassifier.tagLost(stage: NfcReadStage.reading);
@@ -322,7 +332,7 @@ class NfcChipReaderService {
       // Không nội suy nội dung exception vào warning — DG13 chứa PII mở rộng,
       // message exception thô có thể vô tình lộ dữ liệu.
       warnings.add(const NfcWarning(NfcWarningType.dg13ReadOrParseFailed));
-      return null;
+      return (data: null, fullName: null);
     }
   }
 

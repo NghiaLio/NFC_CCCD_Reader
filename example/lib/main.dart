@@ -179,6 +179,10 @@ class _NfcScanExamplePageState extends State<NfcScanExamplePage> {
               const SizedBox(height: 8),
               Text('Họ tên: ${_result!.fullName ?? '-'}'),
               Text(
+                'Họ tên (có dấu): '
+                '${_result!.fullNameWithDiacritics ?? _result!.fullName ?? '-'}',
+              ),
+              Text(
                 'Số định danh: '
                 '${_result!.idNumber != null ? _maskIdNumber(_result!.idNumber!) : '-'}',
               ),

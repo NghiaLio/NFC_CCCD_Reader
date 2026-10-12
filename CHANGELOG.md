@@ -18,6 +18,11 @@
     `traceStream`).
 - Khuyến nghị app dùng `traceStream` + `NfcFailure.errorDetails` để log và
   đẩy lên Sentry/Crashlytics (app tự gom thêm OS/model thiết bị).
+- **Tên đầy đủ:**
+  - Sửa thứ tự `fullName` theo MRZ (họ trước, tên sau) — khớp thứ tự hiển thị
+    tiếng Việt, tránh bị đảo.
+  - Thêm `NfcReadResult.fullNameWithDiacritics` (tên có dấu từ DG13 field 2,
+    fallback về `fullName` MRZ khi không có) — `fullName` vẫn là nguồn chính.
 
 ## 0.1.1
 

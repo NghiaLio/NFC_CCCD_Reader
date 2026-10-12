@@ -24,10 +24,22 @@ import 'package:collection/collection.dart';
 /// 12 (dateOfExpiry). Giữ 2 nguồn dữ liệu trùng nhau sẽ mơ hồ khi chúng lệch
 /// giá trị — top-level là nguồn duy nhất cho các giá trị đó, map trả về ở
 /// đây chỉ chứa dữ liệu KHÔNG có ở đâu khác (đặc thù DG13/CCCD Việt Nam).
+///
+/// Riêng **field 2 (fullName, có thể kèm dấu)** được tách riêng trả về qua
+/// [parseAll] → `.fullName` (không vào map data), để lấy "tên có dấu".
 class NfcDg13Parser {
   const NfcDg13Parser._();
 
-  static Map<String, String> parse(Uint8List dg13Bytes) {
+  /// Map extendedData (key tiếng Anh). Field trùng top-level — gồm cả field 2
+  /// (fullName) — KHÔNG nằm trong map này; top-level `NfcReadResult.fullName`
+  /// lấy từ DG1/MRZ. Để lấy tên có dấu (field 2) dùng [parseAll].
+  static Map<String, String> parse(Uint8List dg13Bytes) =>
+      parseAll(dg13Bytes).data;
+
+  /// Parse DG13 trả về cả map [parse] (qua `.data`) lẫn field 2 — tên, có thể
+  /// kèm dấu — qua `.fullName` (độc lập với map data).
+  static ({Map<String, String> data, String? fullName}) parseAll(
+      Uint8List dg13Bytes) {
     try {
       return _parseInternal(dg13Bytes);
     } on Dg13ParseError {
@@ -37,7 +49,8 @@ class NfcDg13Parser {
     }
   }
 
-  static Map<String, String> _parseInternal(Uint8List dg13Bytes) {
+  static ({Map<String, String> data, String? fullName}) _parseInternal(
+      Uint8List dg13Bytes) {
     final outer = ASN1Parser(dg13Bytes).nextObject();
     if (outer is! ASN1Sequence || outer.elements.isEmpty) {
       throw const Dg13ParseError('DG13 không đúng cấu trúc outer sequence');
@@ -69,8 +82,9 @@ class NfcDg13Parser {
     }
 
     // Field 1 (idNumber), 2 (fullName), 3 (dateOfBirth), 4 (gender),
-    // 5 (nationality) — bỏ qua, đã có ở top-level NfcReadResult (nguồn
-    // DG1/MRZ đáng tin cậy hơn).
+    // 5 (nationality) — KHÔNG đưa vào map data: đã có ở top-level
+    // NfcReadResult (nguồn DG1/MRZ đáng tin cậy hơn). Riêng field 2 (tên,
+    // có thể kèm dấu) được tách ra trả qua `fullName` (xem cuối hàm).
     put('ethnicity', 6);
     put('religion', 7);
     put('placeOfOrigin', 8);
@@ -108,7 +122,14 @@ class NfcDg13Parser {
     // không map thành field nghiệp vụ cho tới khi có xác nhận.
     put('field16Unconfirmed', 16);
 
-    return result;
+    // Field 2 (fullName) — có thể kèm dấu — tách riêng trả qua `fullName`,
+    // không đưa vào map data (tránh trùng với top-level nguồn DG1/MRZ).
+    final fullName = _decodeStringField(fields[2]);
+
+    return (
+      data: result,
+      fullName: (fullName == null || fullName.isEmpty) ? null : fullName,
+    );
   }
 
   static String? _decodeStringField(ASN1Object? object) {

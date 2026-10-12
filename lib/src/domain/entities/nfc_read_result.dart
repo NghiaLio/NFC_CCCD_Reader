@@ -16,6 +16,11 @@ class NfcReadResult {
 
   final String? idNumber;
   final String? fullName;
+
+  /// Tên đầy đủ **có dấu** (nguồn DG13 field 2) — ví dụ "NGUYỄN VĂN ANH".
+  /// Fallback về [fullName] (MRZ, không dấu) khi DG13 không cung cấp.
+  /// [fullName] vẫn là nguồn chính (MRZ); field này chỉ bổ sung tên có dấu.
+  final String? fullNameWithDiacritics;
   final DateTime? dateOfBirth;
   final DateTime? dateOfExpiry;
   final NfcGender? gender;
@@ -62,6 +67,7 @@ class NfcReadResult {
     required this.sessionId,
     this.idNumber,
     this.fullName,
+    this.fullNameWithDiacritics,
     this.dateOfBirth,
     this.dateOfExpiry,
     this.gender,

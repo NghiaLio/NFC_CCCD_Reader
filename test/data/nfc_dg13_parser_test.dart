@@ -44,6 +44,24 @@ void main() {
       },
     );
 
+    test('parseAll().fullName trả về DG13 field 2 (tên có dấu), không vào data', () {
+      final bytes = buildFakeDg13(
+        flatFields: {
+          2: 'NGUYỄN VĂN ANH', // fullName có dấu
+          6: 'KINH', // field không trùng
+        },
+      );
+      final result = NfcDg13Parser.parseAll(bytes);
+      expect(result.fullName, 'NGUYỄN VĂN ANH');
+      expect(result.data.containsKey('fullName'), isFalse);
+      expect(result.data['ethnicity'], 'KINH');
+    });
+
+    test('parseAll().fullName = null khi không có field 2', () {
+      final bytes = buildFakeDg13(flatFields: {6: 'KINH'});
+      expect(NfcDg13Parser.parseAll(bytes).fullName, isNull);
+    });
+
     test('field 13 (cha/mẹ) parse đúng dạng ghép', () {
       final bytes = buildFakeDg13(
         flatFields: {},

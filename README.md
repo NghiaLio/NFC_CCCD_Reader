@@ -201,7 +201,8 @@ await sub.cancel();
 |---|---|
 | `sessionId` | Định danh phiên đọc; khớp với event trong `traceStream`. |
 | `idNumber` | Số định danh từ DG1/MRZ. |
-| `fullName` | Họ tên từ DG1/MRZ. |
+| `fullName` | Họ tên từ DG1/MRZ (chuẩn ICAO, không dấu). |
+| `fullNameWithDiacritics` | Tên có dấu từ DG13 field 2 (ví dụ `NGUYỄN VĂN ANH`); fallback về `fullName` khi không có. |
 | `dateOfBirth`, `dateOfExpiry` | Ngày sinh và ngày hết hạn. |
 | `gender`, `nationality` | Giới tính đã chuẩn hóa và mã quốc tịch ICAO, ví dụ `VNM`. |
 | `faceImageBytes` | Bytes ảnh khuôn mặt từ DG2. |
