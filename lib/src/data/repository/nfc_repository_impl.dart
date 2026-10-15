@@ -1,7 +1,8 @@
 import 'package:flutter_nfc_kit/flutter_nfc_kit.dart';
 
+import '../../domain/entities/nfc_parsed_result.dart';
+import '../../domain/entities/nfc_raw_result.dart';
 import '../../domain/entities/nfc_read_input.dart';
-import '../../domain/entities/nfc_read_result.dart';
 import '../../domain/entities/nfc_trace_event.dart';
 import '../../domain/enums/nfc_availability_status.dart';
 import '../../domain/enums/nfc_read_stage.dart';
@@ -25,12 +26,30 @@ class NfcRepositoryImpl implements NfcRepository {
   }
 
   @override
-  Future<NfcReadResult> readChip(
+  Future<NfcParsedResult> readChip(
     NfcReadInput input, {
     void Function(NfcReadStage stage)? onStage,
     void Function(NfcTraceEvent event)? onTrace,
   }) {
     return _chipReaderService.read(input, onStage: onStage, onTrace: onTrace);
+  }
+
+  @override
+  Future<NfcParsedResult> readParsedChip(
+    NfcReadInput input, {
+    void Function(NfcReadStage stage)? onStage,
+    void Function(NfcTraceEvent event)? onTrace,
+  }) {
+    return _chipReaderService.read(input, onStage: onStage, onTrace: onTrace);
+  }
+
+  @override
+  Future<NfcRawResult> readRawChip(
+    NfcReadInput input, {
+    void Function(NfcReadStage stage)? onStage,
+    void Function(NfcTraceEvent event)? onTrace,
+  }) {
+    return _chipReaderService.readRaw(input, onStage: onStage, onTrace: onTrace);
   }
 
   @override

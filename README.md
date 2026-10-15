@@ -9,6 +9,7 @@ Package không kèm giao diện. Ứng dụng tự xây màn hình nhập CCCD/C
 - Kiểm tra tình trạng NFC trên thiết bị.
 - Đọc CCCD gắn chip Việt Nam bằng PACE, với CAN là 6 số cuối của CCCD.
 - Đọc DG1 (thông tin MRZ), DG2 (ảnh khuôn mặt), DG13 (dữ liệu mở rộng CCCD), DG15 và bằng chứng Active Authentication khi thẻ hỗ trợ.
+- Cung cấp 2 chế độ đọc: `read()` (phân tích cú pháp sang model nghiệp vụ) và `readRaw()` (xuất dữ liệu thô raw bytes / Base64 của DG1, DG2, DG13, DG14, DG15, EF.COM, EF.SOD để gửi Backend xác thực).
 - Báo tiến trình đọc bằng callback hoặc `Stream`.
 - Tracing từng bước đọc qua `traceStream` (breadcrumb + SW1/SW2, đã sanitize) để log/đẩy lên Sentry/Crashlytics.
 - Chuẩn hóa lỗi NFC thành `NfcFailure` (kèm `errorDetails` SW1/SW2) để app không cần xử lý exception thô từ native/MRTD.
@@ -24,10 +25,8 @@ Thứ tự tích hợp:
 
 1. Thêm dependency + `flutter pub get` (mục Cài đặt).
 2. Khai báo native — Cấu hình Android và/hoặc Cấu hình iOS (bắt buộc, không khai báo sẽ không đọc được thẻ).
-3. Trong code: `checkAvailability()` → `read(input, onStage: ...)` → dùng `NfcReadResult`, bắt `NfcFailure`, rồi `dispose()` (mục Sử dụng nhanh).
-4. Nếu quy trình cần xác minh, chuyển `aaChallenge`/`aaSignature`/`aaPublicKeyBytes` (cùng ảnh DG2 và dữ liệu DG1/DG13) cho hệ thống phía trên để xử lý.
-
-> **Lưu ý trọng tâm:** package trả dữ liệu **đã parse** + bằng chứng **Active Authentication**. Nó **chưa trả raw bytes SOD/các DG**, nên hệ thống phía trên **không làm được Passive Authentication** với output hiện tại — chỉ verify được AA. Nếu quy trình bắt buộc cần PA, cần bổ sung raw data (xem mục Lưu ý bảo mật và giới hạn).
+3. Trong code: `checkAvailability()` → `readParsed(input)` hoặc `readRaw(input)` → dùng `NfcParsedResult` / `NfcRawResult`, bắt `NfcFailure`, rồi `dispose()`.
+4. Nếu quy trình cần xác minh danh tính qua Backend: gọi `readRaw(input)` và gửi payload (`result.toMap()`) chứa các trường Base64 (`dg1`, `sod`, `dg13`, `dg2`, `dg14`, `dg15`, `com`) lên server để Backend thực hiện Passive Authentication (PA) và Active Authentication (AA).
 
 ## Cài đặt
 
@@ -157,6 +156,30 @@ try {
 ```
 
 CCCD Việt Nam không in CAN riêng. Dùng `NfcReadInput.paceFromCccdNumber()` với đúng 12 chữ số CCCD; package sẽ lấy 6 số cuối làm CAN để mở khóa, sau đó tự động đối chiếu (cross-verify) toàn bộ 12 số này với dữ liệu gốc trên chip để chống nhập sai.
+
+### Đọc dữ liệu thô (Raw Data) gửi lên Backend xác thực
+
+Khi cần gửi trọn vẹn dữ liệu Base64 lên Backend để đối chiếu chữ ký số SOD (Passive Auth) và Active Auth:
+
+```dart
+final rawResult = await reader.readRaw(
+  NfcReadInput.paceFromCccdNumber('001099012345'),
+);
+
+// Payload dạng Map<String, String?> khớp chuẩn API FE gửi lên Backend:
+// { "dg1": "...", "sod": "...", "dg13": "...", "dg2": "...", "dg14": "...", "dg15": "...", "com": "..." }
+final payload = rawResult.toMap();
+// await apiClient.verifyCccd(payload);
+
+// Đồng thời lấy dữ liệu UI ngay từ rawResult mà KHÔNG cần quét lại:
+final fullName = rawResult.parsed?.fullNameWithDiacritics;
+final avatarBytes = rawResult.parsed?.faceImageBytes;
+```
+
+> **Lưu ý quan trọng (Chỉ 1 lần chạm thẻ duy nhất):**
+> Bạn **không bao giờ** phải bắt người dùng quét thẻ 2 lần. Cả hai API đều thực hiện chung 1 phiên đọc NFC duy nhất:
+> - Nếu gọi `reader.read()` (hoặc `readParsed()`): nhận `NfcParsedResult`, lấy raw backend qua `result.raw!.toMap()`.
+> - Nếu gọi `reader.readRaw()`: nhận `NfcRawResult`, lấy dữ liệu UI qua `rawResult.parsed`.
 
 ## Theo dõi tiến trình bằng Stream
 

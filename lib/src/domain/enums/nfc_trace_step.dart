@@ -31,10 +31,16 @@ enum NfcTraceStep {
   /// Đang đọc DG13 (dữ liệu mở rộng CCCD).
   readDg13,
 
+  /// Đang đọc DG14 (Security Infos).
+  readDg14,
+
   /// Đang đọc DG15 + Active Authentication.
   readDg15Aa,
 
-  /// Phiên thành công, trả về `NfcReadResult`.
+  /// Đang đọc EF.SOD (Document Security Object).
+  readEfSod,
+
+  /// Phiên thành công, trả về kết quả đọc chip.
   completed,
 
   /// Phiên thất bại (kèm SW/root cause ở event).

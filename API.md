@@ -21,7 +21,8 @@ final reader = NfcCccdReader(
 | API | Kiểu trả về | Mô tả |
 |---|---|---|
 | `checkAvailability()` | `Future<NfcAvailabilityStatus>` | Kiểm tra trạng thái NFC của thiết bị. |
-| `read(input, {onStage, onTrace})` | `Future<NfcReadResult>` | Đọc một phiên chip MRTD; lỗi được ném dưới dạng `NfcFailure`. |
+| `read(input, {onStage, onTrace})` / `readParsed(...)` | `Future<NfcParsedResult>` | Đọc một phiên chip MRTD và phân tích cú pháp sang model nghiệp vụ `NfcParsedResult`; lỗi được ném dưới dạng `NfcFailure`. |
+| `readRaw(input, {onStage, onTrace})` | `Future<NfcRawResult>` | Đọc một phiên chip MRTD và trả về thuần raw bytes / chuỗi Base64 (DG1, SOD, DG13, DG2, DG14, DG15, COM) gửi lên Backend xác thực. |
 | `stageStream` | `Stream<NfcReadStage>` | Stream broadcast các mốc tiến trình THÔ của phiên đọc (cho progress bar). |
 | `traceStream` | `Stream<NfcTraceEvent>` | Stream broadcast breadcrumb chi tiết từng bước (cho log/Sentry). |
 | `cancel()` | `Future<void>` | Hủy phiên đọc đang chạy và ngắt kết nối NFC. |
@@ -103,9 +104,11 @@ reader.traceStream.listen((e) {
 
 Các thuộc tính đọc được: `mode`, `can`, `documentNumber`, `dateOfBirth`, `dateOfExpiry`.
 
-## `NfcReadResult`
+## `NfcParsedResult` (trước đây là `NfcReadResult`)
 
-Kết quả của `read()`. Các trường dữ liệu thẻ có thể là `null` nếu thẻ không công bố hoặc không đọc được Data Group tương ứng.
+Kết quả của `read()` hoặc `readParsed()`. Các trường dữ liệu thẻ có thể là `null` nếu thẻ không công bố hoặc không đọc được Data Group tương ứng.
+
+> `NfcReadResult` được giữ lại dưới dạng deprecated typedef alias để tương thích ngược.
 
 | Trường | Kiểu | Nguồn / ý nghĩa |
 |---|---|---|
@@ -126,8 +129,35 @@ Kết quả của `read()`. Các trường dữ liệu thẻ có thể là `null
 | `aaStatus` | `AaEvidenceStatus` | Trạng thái thu thập bằng chứng Active Authentication. |
 | `isChipAuthenticityVerified` | `bool` | Trạng thái Passive Authentication; hiện luôn là `false` vì package chưa triển khai xác minh SOD/CSCA. |
 | `warnings` | `List<NfcWarning>` | Các cảnh báo không-fatal (structured). |
+| `raw` | `NfcRawResult?` | Dữ liệu thô Base64/Bytes của cùng phiên đọc, dùng xuất payload Backend (`result.raw!.toMap()`) trong 1 lần quét duy nhất. |
 
 `NfcWarning`: `type` (`NfcWarningType`) + `detail` (`String?`, kỹ thuật, sanitize). App tự map `NfcWarningType` sang thông điệp hiển thị.
+
+## `NfcRawResult`
+
+Kết quả của `readRaw()` phục vụ gửi payload xác thực lên Backend. Chứa thuần raw bytes và chuỗi Base64:
+
+| Trường | Kiểu | Mô tả |
+|---|---|---|
+| `sessionId` | `String` | Định danh phiên đọc (khớp với `traceStream`). |
+| `dg1` | `String?` | Chuỗi Base64 raw bytes của DG1 (MRZ). |
+| `sod` | `String?` | Chuỗi Base64 raw bytes của EF.SOD (Document Security Object - chứa chữ ký của Bộ Công An C06). |
+| `dg13` | `String?` | Chuỗi Base64 raw bytes của DG13 (Dữ liệu mở rộng CCCD VN). |
+| `dg2` | `String?` | Chuỗi Base64 raw bytes của DG2 (Ảnh sinh trắc học khuôn mặt). |
+| `dg14` | `String?` | Chuỗi Base64 raw bytes của DG14 (Security Infos). |
+| `dg15` | `String?` | Chuỗi Base64 raw bytes của DG15 (Khóa công khai Active Auth). |
+| `com` | `String?` | Chuỗi Base64 raw bytes của EF.COM (Common Data). |
+| `dg1Bytes`, `sodBytes`, ... | `Uint8List?` | Dữ liệu byte gốc tương ứng của từng file. |
+| `aaChallenge` / `aaChallengeBase64` | `Uint8List?` / `String?` | Nonce challenge ngẫu nhiên dùng trong Active Authentication. |
+| `aaSignature` / `aaSignatureBase64` | `Uint8List?` / `String?` | Chữ ký số chip phản hồi. |
+| `aaStatus` | `AaEvidenceStatus` | Trạng thái lấy bằng chứng Active Auth (`captured`, `notSupported`, `failed`). |
+| `warnings` | `List<NfcWarning>` | Cảnh báo không-fatal trong quá trình đọc chip. |
+| `parsed` | `NfcParsedResult?` | Dữ liệu đã parse (họ tên, ngày sinh, ảnh...) dùng hiển thị ngay lên UI trong 1 lần quét duy nhất. |
+
+### Phương thức tiện ích trên `NfcRawResult`:
+- `toMap()`: Trả về `Map<String, String?>` gồm đúng các key `dg1`, `sod`, `dg13`, `dg2`, `dg14`, `dg15`, `com`.
+- `toJson()`: Trả về `Map<String, dynamic>` đã lọc các trường null.
+- `toHexMap()`: Trả về `Map<String, String?>` dưới dạng chuỗi Hex hoa (nếu Backend quy ước Hex thay vì Base64).
 
 ## Trạng thái và lỗi
 
@@ -138,8 +168,8 @@ Kết quả của `read()`. Các trường dữ liệu thẻ có thể là `null
 | `NfcGender` | `male`, `female`, `unspecified` |
 | `AaEvidenceStatus` | `notSupported`, `captured`, `failed` |
 | `NfcFailureType` | `timeout`, `tagLost`, `nfcDisabled`, `wrongCan`, `paceFailed`, `bacFailed`, `dgMissing`, `activeAuthFailed`, `unknown` |
-| `NfcWarningType` | `idNumberMissing`, `dg1NotDeclared`, `dg1ReadFailed`, `dg2NotDeclared`, `dg2NoImage`, `dg2ReadFailed`, `dg13Empty`, `dg13ReadOrParseFailed`, `aaFailed` |
-| `NfcTraceStep` | `started`, `connecting`, `connected`, `sessionStart`, `sessionEstablished`, `readEfCom`, `readDg1`, `readDg2`, `readDg13`, `readDg15Aa`, `completed`, `failed` |
+| `NfcWarningType` | `idNumberMissing`, `dg1NotDeclared`, `dg1ReadFailed`, `dg2NotDeclared`, `dg2NoImage`, `dg2ReadFailed`, `dg13Empty`, `dg13ReadOrParseFailed`, `aaFailed`, `dg14ReadFailed`, `sodReadFailed` |
+| `NfcTraceStep` | `started`, `connecting`, `connected`, `sessionStart`, `sessionEstablished`, `readEfCom`, `readDg1`, `readDg2`, `readDg13`, `readDg14`, `readDg15Aa`, `readEfSod`, `completed`, `failed` |
 
 Lỗi từ luồng NFC được ném dưới dạng `NfcFailure`:
 
@@ -176,6 +206,11 @@ Interface này được export để ứng dụng có thể mock hoặc thay th�
 abstract interface class NfcRepository {
   Future<NfcAvailabilityStatus> checkAvailability();
   Future<NfcReadResult> readChip(
+    NfcReadInput input, {
+    void Function(NfcReadStage stage)? onStage,
+    void Function(NfcTraceEvent event)? onTrace,
+  });
+  Future<NfcRawResult> readRawChip(
     NfcReadInput input, {
     void Function(NfcReadStage stage)? onStage,
     void Function(NfcTraceEvent event)? onTrace,

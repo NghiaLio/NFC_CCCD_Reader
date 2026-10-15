@@ -11,7 +11,9 @@ export 'src/nfc_cccd_reader_base.dart' show NfcCccdReader;
 
 // Domain types cần thiết ở boundary của app tiêu thụ.
 export 'src/domain/entities/nfc_read_input.dart';
+export 'src/domain/entities/nfc_parsed_result.dart';
 export 'src/domain/entities/nfc_read_result.dart';
+export 'src/domain/entities/nfc_raw_result.dart';
 export 'src/domain/entities/nfc_failure.dart';
 export 'src/domain/entities/nfc_error_details.dart';
 export 'src/domain/entities/nfc_warning.dart';

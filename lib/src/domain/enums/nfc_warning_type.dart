@@ -27,4 +27,10 @@ enum NfcWarningType {
 
   /// Không lấy được bằng chứng Active Authentication.
   aaFailed,
+
+  /// Thẻ có công bố DG14 nhưng đọc lỗi.
+  dg14ReadFailed,
+
+  /// Đọc EF.SOD lỗi.
+  sodReadFailed,
 }

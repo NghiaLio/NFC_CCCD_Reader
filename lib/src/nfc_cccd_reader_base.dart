@@ -5,8 +5,9 @@ import 'package:meta/meta.dart';
 import 'data/repository/nfc_repository_impl.dart';
 import 'data/service/nfc_chip_reader_service.dart';
 import 'domain/entities/nfc_failure.dart';
+import 'domain/entities/nfc_parsed_result.dart';
+import 'domain/entities/nfc_raw_result.dart';
 import 'domain/entities/nfc_read_input.dart';
-import 'domain/entities/nfc_read_result.dart';
 import 'domain/entities/nfc_trace_event.dart';
 import 'domain/enums/nfc_availability_status.dart';
 import 'domain/enums/nfc_read_stage.dart';
@@ -21,15 +22,32 @@ abstract interface class NfcCccdReader {
   /// Kiểm tra NFC hệ thống: available / disabled / notSupported.
   Future<NfcAvailabilityStatus> checkAvailability();
 
-  /// Đọc 1 phiên chip MRTD. Ném [NfcFailure] khi lỗi (không bao giờ để lọt
-  /// exception thô từ dmrtd/flutter_nfc_kit ra ngoài package).
+  /// Đọc 1 phiên chip MRTD và phân tích cú pháp sang [NfcParsedResult].
+  /// Ném [NfcFailure] khi lỗi (không bao giờ để lọt exception thô từ dmrtd/flutter_nfc_kit ra ngoài package).
   ///
   /// [onStage] được gọi đúng thời điểm từng bước THẬT bắt đầu — dùng để vẽ
   /// progress UI, không phải timer giả lập.
   ///
   /// [onTrace] nhận breadcrumb chi tiết (mỗi bước 1 [NfcTraceEvent]) — dùng
   /// cho log/Sentry. Nếu không truyền, vẫn có thể lắng nghe qua [traceStream].
-  Future<NfcReadResult> read(
+  Future<NfcParsedResult> read(
+    NfcReadInput input, {
+    void Function(NfcReadStage stage)? onStage,
+    void Function(NfcTraceEvent event)? onTrace,
+  });
+
+  /// Tên gọi tường minh cho [read]: đọc và phân tích cú pháp dữ liệu chip MRTD
+  /// thành [NfcParsedResult].
+  Future<NfcParsedResult> readParsed(
+    NfcReadInput input, {
+    void Function(NfcReadStage stage)? onStage,
+    void Function(NfcTraceEvent event)? onTrace,
+  });
+
+  /// Đọc 1 phiên chip MRTD và trả về dữ liệu thô (raw bytes / chuỗi Base64)
+  /// của các Data Group (DG1, DG2, DG13, DG14, DG15, EF.COM, EF.SOD)
+  /// để gửi lên Backend xác thực hoặc lưu trữ.
+  Future<NfcRawResult> readRaw(
     NfcReadInput input, {
     void Function(NfcReadStage stage)? onStage,
     void Function(NfcTraceEvent event)? onTrace,
@@ -75,12 +93,39 @@ class NfcCccdReaderBase implements NfcCccdReader {
       _repository.checkAvailability();
 
   @override
-  Future<NfcReadResult> read(
+  Future<NfcParsedResult> read(
     NfcReadInput input, {
     void Function(NfcReadStage stage)? onStage,
     void Function(NfcTraceEvent event)? onTrace,
   }) {
     return _repository.readChip(
+      input,
+      onStage: (stage) {
+        _stageController.add(stage);
+        onStage?.call(stage);
+      },
+      onTrace: (event) {
+        _traceController.add(event);
+        onTrace?.call(event);
+      },
+    );
+  }
+
+  @override
+  Future<NfcParsedResult> readParsed(
+    NfcReadInput input, {
+    void Function(NfcReadStage stage)? onStage,
+    void Function(NfcTraceEvent event)? onTrace,
+  }) =>
+      read(input, onStage: onStage, onTrace: onTrace);
+
+  @override
+  Future<NfcRawResult> readRaw(
+    NfcReadInput input, {
+    void Function(NfcReadStage stage)? onStage,
+    void Function(NfcTraceEvent event)? onTrace,
+  }) {
+    return _repository.readRawChip(
       input,
       onStage: (stage) {
         _stageController.add(stage);

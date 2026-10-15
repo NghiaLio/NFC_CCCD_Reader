@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:nfc_cccd_reader/nfc_cccd_reader.dart';
 
 void main() => runApp(const NfcExampleApp());
@@ -33,7 +35,8 @@ class _NfcScanExamplePageState extends State<NfcScanExamplePage> {
   late final StreamSubscription<NfcTraceEvent> _traceSub;
 
   NfcReadStage? _stage;
-  NfcReadResult? _result;
+  NfcParsedResult? _result;
+  NfcRawResult? _rawResult;
   String? _errorMessage;
   bool _isScanning = false;
   final List<String> _logs = [];
@@ -52,6 +55,7 @@ class _NfcScanExamplePageState extends State<NfcScanExamplePage> {
     super.dispose();
   }
 
+  /// Quét và phân tích cú pháp dữ liệu sang [NfcParsedResult]
   Future<void> _scan(String cccdNumber) async {
     final availability = await _reader.checkAvailability();
     if (availability != NfcAvailabilityStatus.available) {
@@ -63,19 +67,25 @@ class _NfcScanExamplePageState extends State<NfcScanExamplePage> {
       _isScanning = true;
       _errorMessage = null;
       _result = null;
-      _logs.add('--- Bắt đầu quét: $cccdNumber ---');
+      _rawResult = null;
+      _logs.add('--- Bắt đầu quét Parsed: $cccdNumber ---');
     });
 
     try {
       final input = NfcReadInput.paceFromCccdNumber(cccdNumber);
-      final result = await _reader.read(
+      final result = await _reader.readParsed(
         input,
         onStage: (stage) => setState(() => _stage = stage),
       );
       _logResultSummary(result);
-      setState(() => _result = result);
+      if (result.raw != null) {
+        _logRawResultSummary(result.raw!);
+      }
+      setState(() {
+        _result = result;
+        _rawResult = result.raw;
+      });
     } on NfcFailure catch (failure) {
-      // Log metadata (sessionId + type + errorDetails) — không lộ PII.
       final logMsg = '[FAIL ${failure.sessionId}] ${failure.type.name} '
           '${failure.errorDetails}';
       debugPrint(logMsg);
@@ -84,7 +94,56 @@ class _NfcScanExamplePageState extends State<NfcScanExamplePage> {
         _errorMessage = _failureMessage(failure.type);
       });
     } on ArgumentError catch (e) {
-      // App tự map tên trường lỗi (.name) sang thông điệp ngôn ngữ riêng.
+      final logMsg = '[INPUT ERROR] ${e.name}';
+      debugPrint(logMsg);
+      setState(() {
+        _logs.add(logMsg);
+        _errorMessage = _inputErrorMessage(e.name);
+      });
+    } finally {
+      setState(() => _isScanning = false);
+    }
+  }
+
+  /// Quét thuần dữ liệu thô (raw bytes / chuỗi Base64) sang [NfcRawResult]
+  Future<void> _scanRaw(String cccdNumber) async {
+    final availability = await _reader.checkAvailability();
+    if (availability != NfcAvailabilityStatus.available) {
+      setState(() => _errorMessage = 'NFC không khả dụng: $availability');
+      return;
+    }
+
+    setState(() {
+      _isScanning = true;
+      _errorMessage = null;
+      _result = null;
+      _rawResult = null;
+      _logs.add('--- Bắt đầu quét Raw Data (Backend payload): $cccdNumber ---');
+    });
+
+    try {
+      final input = NfcReadInput.paceFromCccdNumber(cccdNumber);
+      final rawResult = await _reader.readRaw(
+        input,
+        onStage: (stage) => setState(() => _stage = stage),
+      );
+      _logRawResultSummary(rawResult);
+      if (rawResult.parsed != null) {
+        _logResultSummary(rawResult.parsed!);
+      }
+      setState(() {
+        _rawResult = rawResult;
+        _result = rawResult.parsed;
+      });
+    } on NfcFailure catch (failure) {
+      final logMsg = '[FAIL ${failure.sessionId}] ${failure.type.name} '
+          '${failure.errorDetails}';
+      debugPrint(logMsg);
+      setState(() {
+        _logs.add(logMsg);
+        _errorMessage = _failureMessage(failure.type);
+      });
+    } on ArgumentError catch (e) {
       final logMsg = '[INPUT ERROR] ${e.name}';
       debugPrint(logMsg);
       setState(() {
@@ -97,8 +156,6 @@ class _NfcScanExamplePageState extends State<NfcScanExamplePage> {
   }
 
   /// Breadcrumb từ package (đã sanitize: chỉ metadata, không PII).
-  /// Trong production: gom thêm OS/model thiết bị rồi đẩy lên
-  /// Sentry/Crashlytics, nhóm theo [NfcTraceEvent.sessionId].
   void _onTrace(NfcTraceEvent e) {
     final msg = '[TRACE ${e.sessionId}] ${e.step.name} '
         '(${e.elapsed.inMilliseconds}ms'
@@ -116,11 +173,10 @@ class _NfcScanExamplePageState extends State<NfcScanExamplePage> {
     return '$first3••••••$last3';
   }
 
-  /// Log CHỈ metadata (không giá trị PII): presence, độ dài, mã — không in
-  /// tên/số định danh/nội dung DG13 theo đúng guardrail của package.
-  void _logResultSummary(NfcReadResult result) {
+  /// Log kết quả đã parse (ParsedResult)
+  void _logResultSummary(NfcParsedResult result) {
     final summary = [
-      '================ NFC read result ================',
+      '================ NFC PARSED RESULT ===============',
       'sessionId            : ${result.sessionId}',
       'idNumber present     : ${result.idNumber != null}',
       'fullName present     : ${result.fullName != null}',
@@ -139,6 +195,72 @@ class _NfcScanExamplePageState extends State<NfcScanExamplePage> {
     ].join('\n');
     debugPrint(summary);
     setState(() => _logs.add(summary));
+  }
+
+  /// Log kết quả dữ liệu thô (RawResult)
+  void _logRawResultSummary(NfcRawResult raw) {
+    String preview(String? str) {
+      if (str == null) return 'null';
+      if (str.length <= 30) return str;
+      return '${str.substring(0, 15)}...${str.substring(str.length - 10)} (${str.length} chars)';
+    }
+
+    final summary = [
+      '================= NFC RAW RESULT =================',
+      'sessionId            : ${raw.sessionId}',
+      'dg1 (Base64)         : ${preview(raw.dg1)} (${raw.dg1Bytes?.lengthInBytes ?? 0} bytes)',
+      'sod (Base64)         : ${preview(raw.sod)} (${raw.sodBytes?.lengthInBytes ?? 0} bytes)',
+      'dg13 (Base64)        : ${preview(raw.dg13)} (${raw.dg13Bytes?.lengthInBytes ?? 0} bytes)',
+      'dg2 (Base64)         : ${preview(raw.dg2)} (${raw.dg2Bytes?.lengthInBytes ?? 0} bytes)',
+      'dg14 (Base64)        : ${preview(raw.dg14)} (${raw.dg14Bytes?.lengthInBytes ?? 0} bytes)',
+      'dg15 (Base64)        : ${preview(raw.dg15)} (${raw.dg15Bytes?.lengthInBytes ?? 0} bytes)',
+      'com (Base64)         : ${preview(raw.com)} (${raw.comBytes?.lengthInBytes ?? 0} bytes)',
+      'aaStatus             : ${raw.aaStatus.name}',
+      'aaChallenge bytes    : ${raw.aaChallenge?.lengthInBytes ?? 0}',
+      'aaSignature bytes    : ${raw.aaSignature?.lengthInBytes ?? 0}',
+      'warnings             : ${raw.warnings.map((w) => w.type.name).join(', ')}',
+      '===================================================',
+    ].join('\n');
+    debugPrint(summary);
+    setState(() => _logs.add(summary));
+  }
+
+  Widget _rawItem(String name, String? base64Str, int? bytes) {
+    final hasData = base64Str != null && base64Str.isNotEmpty;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 55,
+            child: Text(
+              name,
+              style: const TextStyle(fontWeight: FontWeight.bold, fontFamily: 'monospace'),
+            ),
+          ),
+          Icon(
+            hasData ? Icons.check_circle : Icons.remove_circle_outline,
+            size: 16,
+            color: hasData ? Colors.green : Colors.grey,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              hasData
+                  ? '${bytes ?? 0} B | ${base64Str.substring(0, base64Str.length > 25 ? 25 : base64Str.length)}...'
+                  : 'Không có dữ liệu',
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 12,
+                color: hasData ? Colors.black87 : Colors.grey,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -171,11 +293,14 @@ class _NfcScanExamplePageState extends State<NfcScanExamplePage> {
                 _errorMessage!,
                 style: const TextStyle(color: Colors.red),
               ),
+
+            // Hiển thị kết quả Parsed
             if (_result != null) ...[
               const Divider(height: 32),
               if (_result!.faceImageBytes != null)
-                  Center(
-                      child: Image.memory(_result!.faceImageBytes!, height: 160)),
+                Center(
+                  child: Image.memory(_result!.faceImageBytes!, height: 160),
+                ),
               const SizedBox(height: 8),
               Text('Họ tên: ${_result!.fullName ?? '-'}'),
               Text(
@@ -212,10 +337,109 @@ class _NfcScanExamplePageState extends State<NfcScanExamplePage> {
                 Text('Cảnh báo: '
                     '${_result!.warnings.map((w) => _warningLabel(w.type)).join(', ')}'),
             ],
-            const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: _isScanning ? null : () => _scan(_cccdController.text),
-              child: const Text('Bắt đầu quét'),
+
+            // Hiển thị kết quả Raw Data
+            if (_rawResult != null) ...[
+              const Divider(height: 32),
+              Card(
+                color: Colors.blueGrey.shade50,
+                elevation: 2,
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Raw Data Payload (Backend)',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.indigo,
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.copy, size: 20),
+                            tooltip: 'Sao chép JSON payload cho Backend',
+                            onPressed: () {
+                              final jsonString = jsonEncode(_rawResult!.toMap());
+                              Clipboard.setData(ClipboardData(text: jsonString));
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Đã sao chép JSON payload vào clipboard!'),
+                                  duration: Duration(seconds: 2),
+                                ),
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+                      Text(
+                        'Session ID: ${_rawResult!.sessionId}',
+                        style: const TextStyle(fontSize: 11, color: Colors.grey),
+                      ),
+                      const SizedBox(height: 8),
+                      _rawItem('dg1', _rawResult!.dg1, _rawResult!.dg1Bytes?.lengthInBytes),
+                      _rawItem('sod', _rawResult!.sod, _rawResult!.sodBytes?.lengthInBytes),
+                      _rawItem('dg13', _rawResult!.dg13, _rawResult!.dg13Bytes?.lengthInBytes),
+                      _rawItem('dg2', _rawResult!.dg2, _rawResult!.dg2Bytes?.lengthInBytes),
+                      _rawItem('dg14', _rawResult!.dg14, _rawResult!.dg14Bytes?.lengthInBytes),
+                      _rawItem('dg15', _rawResult!.dg15, _rawResult!.dg15Bytes?.lengthInBytes),
+                      _rawItem('com', _rawResult!.com, _rawResult!.comBytes?.lengthInBytes),
+                      const Divider(),
+                      Text('Active Authentication: ${_rawResult!.aaStatus.name}'),
+                      if (_rawResult!.warnings.isNotEmpty)
+                        Text(
+                          'Cảnh báo: ${_rawResult!.warnings.map((w) => _warningLabel(w.type)).join(', ')}',
+                          style: const TextStyle(color: Colors.orange),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+
+            Row(
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Theme.of(context).primaryColor,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    onPressed: _isScanning ? null : () => _scan(_cccdController.text),
+                    icon: const Icon(Icons.nfc),
+                    label: const Text(
+                      'Quét (1 lần lấy cả 2)',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  flex: 2,
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    onPressed: _isScanning ? null : () => _scanRaw(_cccdController.text),
+                    icon: const Icon(Icons.data_object, size: 16),
+                    label: const Text('API readRaw()'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Center(
+              child: Text(
+                'Chỉ cần 1 chạm: Cả 2 API đều tự động trả về đầy đủ cả Parsed UI và Raw Backend Payload.',
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                textAlign: TextAlign.center,
+              ),
             ),
             const Divider(height: 32),
             Row(
@@ -285,6 +509,8 @@ String _warningLabel(NfcWarningType type) => switch (type) {
       NfcWarningType.dg13Empty => 'DG13 trống',
       NfcWarningType.dg13ReadOrParseFailed => 'Lỗi đọc DG13',
       NfcWarningType.aaFailed => 'Không lấy được Active Authentication',
+      NfcWarningType.dg14ReadFailed => 'Lỗi đọc DG14',
+      NfcWarningType.sodReadFailed => 'Lỗi đọc EF.SOD',
     };
 
 /// Map tên trường lỗi (`.name` của `ArgumentError`) sang thông điệp riêng —
