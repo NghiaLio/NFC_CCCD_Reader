@@ -38,13 +38,23 @@ typedef _Identity = ({
 /// field 2 (tên, có thể kèm dấu) tách riêng. Cả hai `null` nếu không đọc được.
 typedef _Dg13Data = ({Map<String, String>? data, String? fullName});
 
-/// Đọc 1 phiên chip MRTD: connect → PACE/BAC → EF.COM → DG1/DG2/DG13/DG15+AA,
-/// tất cả trong cùng 1 lần chạm thẻ.
+/// Kết quả đọc DG15 và xác thực chủ động (Active Authentication).
+typedef _AaResult = ({
+  Uint8List? dg15Bytes,
+  Uint8List? challenge,
+  Uint8List? signature,
+  Uint8List? publicKeyBytes,
+  String? algorithm,
+  AaEvidenceStatus status,
+});
+
+/// Đọc 1 phiên chip MRTD: connect → PACE/BAC → EF.COM → DG1/DG2/DG13/DG14/DG15+AA/SOD,
+/// tất cả trong cùng 1 lần chạm thẻ duy nhất.
 ///
-/// Mỗi phiên sinh 1 `sessionId` và phát 1 [NfcTraceEvent] breadcrumb cho từng
+/// Mỗi phiên sinh 1 `sessionId` và phát các [NfcTraceEvent] breadcrumb cho từng
 /// bước qua `read(onTrace: ...)` — chỉ chứa metadata an toàn (bước, SW1/SW2,
-/// độ dài byte, chi tiết đã sanitize), KHÔNG kèm PII (MRZ/tên/ảnh/key). App
-/// hứng stream này để log/Sentry.
+/// độ dài byte, thời lượng ms, chi tiết đã sanitize), KHÔNG kèm PII (MRZ/tên/ảnh/key).
+/// App hứng stream này để log, Sentry hoặc phân tích bottleneck thời gian.
 class NfcChipReaderService {
   NfcChipReaderService({
     NfcProvider? nfcProvider,
@@ -75,6 +85,7 @@ class NfcChipReaderService {
   }) =>
       read(input, onStage: onStage, onTrace: onTrace);
 
+  /// Đọc trọn vẹn dữ liệu thô (raw bytes và chuỗi Base64) phục vụ gửi Backend xác thực.
   Future<NfcRawResult> readRaw(
     NfcReadInput input, {
     void Function(NfcReadStage stage)? onStage,
@@ -88,6 +99,10 @@ class NfcChipReaderService {
             (await _readCardSessionData(passport, efCom, trace, input)).raw,
       );
 
+  /// Huỷ phiên đang chạy — ngắt kết nối khiến `read()` tự thoát qua nhánh lỗi.
+  Future<void> cancel() => _nfcProvider.disconnect();
+
+  /// Điều phối vòng đời 1 phiên NFC (kết nối, timeout, chuyển đổi stage, cleanup).
   Future<T> _runSession<T>({
     required NfcReadInput input,
     void Function(NfcReadStage stage)? onStage,
@@ -157,20 +172,21 @@ class NfcChipReaderService {
         );
       }
       final details = failure.errorDetails;
+      final detailMsg = details?.rootCause != null && details?.detail != null
+          ? '${details!.rootCause}: ${details.detail}'
+          : details?.rootCause ?? details?.detail;
+
       trace.emit(
         NfcTraceStep.failed,
         sw1: details?.sw1,
         sw2: details?.sw2,
-        detail: details?.rootCause ?? details?.detail,
+        detail: detailMsg,
       );
       throw failure;
     } finally {
       await _nfcProvider.disconnect();
     }
   }
-
-  /// Huỷ phiên đang chạy — ngắt kết nối khiến `read()` tự thoát qua nhánh lỗi.
-  Future<void> cancel() => _nfcProvider.disconnect();
 
   NfcFailure _classify(Object e, NfcReadStage stage) {
     final base = NfcErrorClassifier.isTagLostError(e)
@@ -205,7 +221,9 @@ class NfcChipReaderService {
           );
       }
       trace.emit(NfcTraceStep.readEfCom);
-      return await passport.readEfCOM();
+      final efCom = await passport.readEfCOM();
+      trace.emit(NfcTraceStep.readEfCom, bytes: efCom.toBytes().lengthInBytes);
+      return efCom;
     } on NfcFailure {
       rethrow;
     } on PassportError catch (e) {
@@ -221,6 +239,8 @@ class NfcChipReaderService {
     }
   }
 
+  /// Đọc tuần tự tất cả Data Group trong 1 phiên chạm thẻ duy nhất.
+  /// Trả về đồng thời cả [NfcParsedResult] và [NfcRawResult] đã được liên kết chéo.
   Future<({NfcParsedResult parsed, NfcRawResult raw})> _readCardSessionData(
     Passport passport,
     EfCOM efCom,
@@ -230,183 +250,428 @@ class NfcChipReaderService {
     final warnings = <NfcWarning>[];
     final comBytes = efCom.toBytes();
 
-    // 1. DG1 (MRZ + Identity)
-    Uint8List? dg1Bytes;
-    var identity = _emptyIdentity();
-    if (!efCom.dgTags.contains(EfDG1.TAG)) {
-      warnings.add(const NfcWarning(NfcWarningType.dg1NotDeclared));
-    } else {
-      trace.emit(NfcTraceStep.readDg1);
-      try {
-        final dg1 = await passport.readEfDG1();
-        dg1Bytes = dg1.toBytes();
-        trace.emit(NfcTraceStep.readDg1, bytes: dg1Bytes.lengthInBytes);
+    // 1. DG1 (MRZ + Identity + Kiểm tra CCCD input)
+    final dg1Result = await _readDg1(
+      passport: passport,
+      efCom: efCom,
+      input: input,
+      trace: trace,
+      warnings: warnings,
+    );
 
-        final mrz = dg1.mrz;
-        final fullName = '${mrz.lastName} ${mrz.firstName}'.trim();
-        final optionalData = mrz.optionalData;
-        final idNumber = optionalData.length >= 12
-            ? optionalData.substring(0, 12)
-            : null;
-        if (idNumber == null) {
-          warnings.add(const NfcWarning(NfcWarningType.idNumberMissing));
-        }
+    // 2. DG2 (Ảnh chân dung sinh trắc học)
+    final dg2Result = await _readDg2(
+      passport: passport,
+      efCom: efCom,
+      trace: trace,
+      warnings: warnings,
+    );
 
-        identity = (
-          idNumber: idNumber,
-          fullName: fullName.isEmpty ? null : fullName,
-          dateOfBirth: mrz.dateOfBirth,
-          dateOfExpiry: mrz.dateOfExpiry,
-          gender: _parseGender(mrz.gender),
-          nationality: mrz.nationality,
-        );
-
-        if (input.cccdNumber != null && idNumber != null) {
-          if (input.cccdNumber != idNumber) {
-            throw const NfcFailure(
-              NfcFailureType.wrongCan,
-              errorDetails: NfcErrorDetails(
-                stage: NfcReadStage.validating,
-                rootCause: 'CccdNumberMismatch',
-                detail: 'Input CCCD number does not match idNumber from DG1',
-              ),
-            );
-          }
-        }
-      } catch (e) {
-        if (e is NfcFailure) rethrow;
-        if (NfcErrorClassifier.isTagLostError(e)) {
-          throw NfcErrorClassifier.tagLost(stage: NfcReadStage.reading);
-        }
-        warnings.add(const NfcWarning(NfcWarningType.dg1ReadFailed));
-      }
-    }
-
-    // 2. DG2 (Ảnh khuôn mặt)
-    Uint8List? dg2Bytes;
-    Uint8List? faceImageBytes;
-    if (!efCom.dgTags.contains(EfDG2.TAG)) {
-      warnings.add(const NfcWarning(NfcWarningType.dg2NotDeclared));
-    } else {
-      trace.emit(NfcTraceStep.readDg2);
-      try {
-        final dg2 = await passport.readEfDG2();
-        dg2Bytes = dg2.toBytes();
-        faceImageBytes = dg2.imageData;
-        trace.emit(NfcTraceStep.readDg2, bytes: dg2Bytes.lengthInBytes);
-        if (faceImageBytes == null) {
-          warnings.add(const NfcWarning(NfcWarningType.dg2NoImage));
-        }
-      } catch (e) {
-        if (NfcErrorClassifier.isTagLostError(e)) {
-          throw NfcErrorClassifier.tagLost(stage: NfcReadStage.reading);
-        }
-        warnings.add(const NfcWarning(NfcWarningType.dg2ReadFailed));
-      }
-    }
-
-    // 3. DG13 (Dữ liệu mở rộng CCCD VN)
-    Uint8List? dg13Bytes;
-    _Dg13Data dg13Data = (data: null, fullName: null);
-    if (efCom.dgTags.contains(EfDG13.TAG)) {
-      trace.emit(NfcTraceStep.readDg13);
-      try {
-        dg13Bytes = (await passport.readEfDG13()).toBytes();
-        trace.emit(NfcTraceStep.readDg13, bytes: dg13Bytes.lengthInBytes);
-        final parsed = NfcDg13Parser.parseAll(dg13Bytes);
-        dg13Data = (data: parsed.data, fullName: parsed.fullName);
-        if (parsed.data.isEmpty && parsed.fullName == null) {
-          warnings.add(const NfcWarning(NfcWarningType.dg13Empty));
-        }
-      } catch (e) {
-        if (NfcErrorClassifier.isTagLostError(e)) {
-          throw NfcErrorClassifier.tagLost(stage: NfcReadStage.reading);
-        }
-        warnings.add(const NfcWarning(NfcWarningType.dg13ReadOrParseFailed));
-      }
-    }
+    // 3. DG13 (Dữ liệu mở rộng CCCD Việt Nam)
+    final dg13Result = await _readDg13(
+      passport: passport,
+      efCom: efCom,
+      trace: trace,
+      warnings: warnings,
+    );
 
     // 4. DG14 (Security Infos)
-    Uint8List? dg14Bytes;
-    if (efCom.dgTags.contains(EfDG14.TAG)) {
-      trace.emit(NfcTraceStep.readDg14);
-      try {
-        final dg14 = await passport.readEfDG14();
-        dg14Bytes = dg14.toBytes();
-        trace.emit(NfcTraceStep.readDg14, bytes: dg14Bytes.lengthInBytes);
-      } catch (e) {
-        if (NfcErrorClassifier.isTagLostError(e)) {
-          throw NfcErrorClassifier.tagLost(stage: NfcReadStage.reading);
-        }
-        warnings.add(const NfcWarning(NfcWarningType.dg14ReadFailed));
-      }
+    final dg14Bytes = await _readDg14(
+      passport: passport,
+      efCom: efCom,
+      trace: trace,
+      warnings: warnings,
+    );
+
+    // 5. DG15 + Active Authentication (Bằng chứng chống sao chép chip)
+    final aaResult = await _readDg15Aa(
+      passport: passport,
+      efCom: efCom,
+      trace: trace,
+      warnings: warnings,
+    );
+
+    // 6. EF.SOD (Document Security Object - Chữ ký Bộ Công An C06)
+    final sodBytes = await _readEfSod(
+      passport: passport,
+      trace: trace,
+      warnings: warnings,
+    );
+
+    // 7. Tạo và liên kết 2 đối tượng kết quả
+    return _buildSessionResults(
+      sessionId: trace.sessionId,
+      identity: dg1Result.identity,
+      dg1Bytes: dg1Result.bytes,
+      dg2Bytes: dg2Result.bytes,
+      faceImageBytes: dg2Result.faceImageBytes,
+      dg13Bytes: dg13Result.bytes,
+      dg13Data: dg13Result.data,
+      dg14Bytes: dg14Bytes,
+      aaResult: aaResult,
+      sodBytes: sodBytes,
+      comBytes: comBytes,
+      warnings: warnings,
+    );
+  }
+
+  // ===========================================================================
+  // Các phương thức đọc chuyên biệt từng Data Group (Modular Readers)
+  // ===========================================================================
+
+  Future<({Uint8List? bytes, _Identity identity})> _readDg1({
+    required Passport passport,
+    required EfCOM efCom,
+    required NfcReadInput input,
+    required _TraceSession trace,
+    required List<NfcWarning> warnings,
+  }) async {
+    if (!efCom.dgTags.contains(EfDG1.TAG)) {
+      warnings.add(const NfcWarning(NfcWarningType.dg1NotDeclared));
+      return (bytes: null, identity: _emptyIdentity());
     }
 
-    // 5. DG15 + Active Authentication
-    Uint8List? dg15Bytes;
-    Uint8List? aaChallenge;
-    Uint8List? aaSignature;
-    Uint8List? aaPublicKeyBytes;
-    String? aaAlgorithm;
-    var aaStatus = AaEvidenceStatus.notSupported;
-    if (efCom.dgTags.contains(EfDG15.TAG)) {
-      trace.emit(NfcTraceStep.readDg15Aa);
-      try {
-        final dg15 = await passport.readEfDG15();
-        dg15Bytes = dg15.toBytes();
-        final challenge = _generateAaChallenge();
-        final signature = await passport.activeAuthenticate(challenge);
-        aaChallenge = challenge;
-        aaSignature = signature;
-        aaPublicKeyBytes = dg15.aaPublicKey.rawSubjectPublicKey();
-        aaAlgorithm = _describeAaAlgorithm(dg15.aaPublicKey.type);
-        aaStatus = AaEvidenceStatus.captured;
-        trace.emit(
-          NfcTraceStep.readDg15Aa,
-          bytes: signature.lengthInBytes,
-          detail:
-              'challenge=${_fingerprint(challenge)} sig=${_fingerprint(signature)}',
-        );
-      } catch (e) {
-        if (NfcErrorClassifier.isTagLostError(e)) {
-          throw NfcErrorClassifier.tagLost(stage: NfcReadStage.reading);
-        }
-        warnings.add(const NfcWarning(NfcWarningType.aaFailed));
-        aaStatus = AaEvidenceStatus.failed;
+    final stopwatch = Stopwatch()..start();
+    trace.emit(NfcTraceStep.readDg1);
+
+    try {
+      final dg1 = await passport.readEfDG1();
+      final dg1Bytes = dg1.toBytes();
+      stopwatch.stop();
+
+      trace.emit(
+        NfcTraceStep.readDg1,
+        bytes: dg1Bytes.lengthInBytes,
+        detail: '${stopwatch.elapsedMilliseconds}ms',
+      );
+
+      final mrz = dg1.mrz;
+      final fullName = '${mrz.lastName} ${mrz.firstName}'.trim();
+      final optionalData = mrz.optionalData;
+      final idNumber =
+          optionalData.length >= 12 ? optionalData.substring(0, 12) : null;
+
+      if (idNumber == null) {
+        warnings.add(const NfcWarning(NfcWarningType.idNumberMissing));
       }
+
+      final identity = (
+        idNumber: idNumber,
+        fullName: fullName.isEmpty ? null : fullName,
+        dateOfBirth: mrz.dateOfBirth,
+        dateOfExpiry: mrz.dateOfExpiry,
+        gender: _parseGender(mrz.gender),
+        nationality: mrz.nationality,
+      );
+
+      // Đối chiếu số CCCD nhập vào với số định danh thực tế trên DG1
+      if (input.cccdNumber != null && idNumber != null) {
+        if (input.cccdNumber != idNumber) {
+          throw const NfcFailure(
+            NfcFailureType.wrongCan,
+            errorDetails: NfcErrorDetails(
+              stage: NfcReadStage.validating,
+              rootCause: 'CccdNumberMismatch',
+              detail: 'Input CCCD number does not match idNumber from DG1',
+            ),
+          );
+        }
+      }
+
+      return (bytes: dg1Bytes, identity: identity);
+    } catch (e) {
+      if (e is NfcFailure) rethrow;
+      _handleDgReadError(
+        step: NfcTraceStep.readDg1,
+        warningType: NfcWarningType.dg1ReadFailed,
+        error: e,
+        trace: trace,
+        warnings: warnings,
+      );
+      return (bytes: null, identity: _emptyIdentity());
+    }
+  }
+
+  Future<({Uint8List? bytes, Uint8List? faceImageBytes})> _readDg2({
+    required Passport passport,
+    required EfCOM efCom,
+    required _TraceSession trace,
+    required List<NfcWarning> warnings,
+  }) async {
+    if (!efCom.dgTags.contains(EfDG2.TAG)) {
+      warnings.add(const NfcWarning(NfcWarningType.dg2NotDeclared));
+      return (bytes: null, faceImageBytes: null);
     }
 
-    // 6. EF.SOD (Document Security Object)
-    Uint8List? sodBytes;
+    final stopwatch = Stopwatch()..start();
+    trace.emit(NfcTraceStep.readDg2);
+
+    try {
+      final dg2 = await passport.readEfDG2();
+      final dg2Bytes = dg2.toBytes();
+      final faceImageBytes = dg2.imageData;
+      stopwatch.stop();
+
+      trace.emit(
+        NfcTraceStep.readDg2,
+        bytes: dg2Bytes.lengthInBytes,
+        detail: '${stopwatch.elapsedMilliseconds}ms',
+      );
+
+      if (faceImageBytes == null) {
+        warnings.add(const NfcWarning(NfcWarningType.dg2NoImage));
+      }
+
+      return (bytes: dg2Bytes, faceImageBytes: faceImageBytes);
+    } catch (e) {
+      _handleDgReadError(
+        step: NfcTraceStep.readDg2,
+        warningType: NfcWarningType.dg2ReadFailed,
+        error: e,
+        trace: trace,
+        warnings: warnings,
+      );
+      return (bytes: null, faceImageBytes: null);
+    }
+  }
+
+  Future<({Uint8List? bytes, _Dg13Data data})> _readDg13({
+    required Passport passport,
+    required EfCOM efCom,
+    required _TraceSession trace,
+    required List<NfcWarning> warnings,
+  }) async {
+    if (!efCom.dgTags.contains(EfDG13.TAG)) {
+      return (bytes: null, data: (data: null, fullName: null));
+    }
+
+    final stopwatch = Stopwatch()..start();
+    trace.emit(NfcTraceStep.readDg13);
+
+    try {
+      final dg13Bytes = (await passport.readEfDG13()).toBytes();
+      stopwatch.stop();
+
+      trace.emit(
+        NfcTraceStep.readDg13,
+        bytes: dg13Bytes.lengthInBytes,
+        detail: '${stopwatch.elapsedMilliseconds}ms',
+      );
+
+      final parsed = NfcDg13Parser.parseAll(dg13Bytes);
+      if (parsed.data.isEmpty && parsed.fullName == null) {
+        warnings.add(const NfcWarning(NfcWarningType.dg13Empty));
+      }
+
+      return (
+        bytes: dg13Bytes,
+        data: (data: parsed.data, fullName: parsed.fullName),
+      );
+    } catch (e) {
+      _handleDgReadError(
+        step: NfcTraceStep.readDg13,
+        warningType: NfcWarningType.dg13ReadOrParseFailed,
+        error: e,
+        trace: trace,
+        warnings: warnings,
+      );
+      return (bytes: null, data: (data: null, fullName: null));
+    }
+  }
+
+  Future<Uint8List?> _readDg14({
+    required Passport passport,
+    required EfCOM efCom,
+    required _TraceSession trace,
+    required List<NfcWarning> warnings,
+  }) async {
+    if (!efCom.dgTags.contains(EfDG14.TAG)) {
+      return null;
+    }
+
+    final stopwatch = Stopwatch()..start();
+    trace.emit(NfcTraceStep.readDg14);
+
+    try {
+      final dg14 = await passport.readEfDG14();
+      final dg14Bytes = dg14.toBytes();
+      stopwatch.stop();
+
+      trace.emit(
+        NfcTraceStep.readDg14,
+        bytes: dg14Bytes.lengthInBytes,
+        detail: '${stopwatch.elapsedMilliseconds}ms',
+      );
+
+      return dg14Bytes;
+    } catch (e) {
+      _handleDgReadError(
+        step: NfcTraceStep.readDg14,
+        warningType: NfcWarningType.dg14ReadFailed,
+        error: e,
+        trace: trace,
+        warnings: warnings,
+      );
+      return null;
+    }
+  }
+
+  Future<_AaResult> _readDg15Aa({
+    required Passport passport,
+    required EfCOM efCom,
+    required _TraceSession trace,
+    required List<NfcWarning> warnings,
+  }) async {
+    if (!efCom.dgTags.contains(EfDG15.TAG)) {
+      return (
+        dg15Bytes: null,
+        challenge: null,
+        signature: null,
+        publicKeyBytes: null,
+        algorithm: null,
+        status: AaEvidenceStatus.notSupported,
+      );
+    }
+
+    final stopwatch = Stopwatch()..start();
+    trace.emit(NfcTraceStep.readDg15Aa);
+
+    try {
+      final dg15 = await passport.readEfDG15();
+      final dg15Bytes = dg15.toBytes();
+      final challenge = _generateAaChallenge();
+      final signature = await passport.activeAuthenticate(challenge);
+      stopwatch.stop();
+
+      final publicKeyBytes = dg15.aaPublicKey.rawSubjectPublicKey();
+      final algorithm = _describeAaAlgorithm(dg15.aaPublicKey.type);
+
+      trace.emit(
+        NfcTraceStep.readDg15Aa,
+        bytes: signature.lengthInBytes,
+        detail:
+            '${stopwatch.elapsedMilliseconds}ms, challenge=${_fingerprint(challenge)} sig=${_fingerprint(signature)}',
+      );
+
+      return (
+        dg15Bytes: dg15Bytes,
+        challenge: challenge,
+        signature: signature,
+        publicKeyBytes: publicKeyBytes,
+        algorithm: algorithm,
+        status: AaEvidenceStatus.captured,
+      );
+    } catch (e) {
+      _handleDgReadError(
+        step: NfcTraceStep.readDg15Aa,
+        warningType: NfcWarningType.aaFailed,
+        error: e,
+        trace: trace,
+        warnings: warnings,
+      );
+      return (
+        dg15Bytes: null,
+        challenge: null,
+        signature: null,
+        publicKeyBytes: null,
+        algorithm: null,
+        status: AaEvidenceStatus.failed,
+      );
+    }
+  }
+
+  Future<Uint8List?> _readEfSod({
+    required Passport passport,
+    required _TraceSession trace,
+    required List<NfcWarning> warnings,
+  }) async {
+    final stopwatch = Stopwatch()..start();
     trace.emit(NfcTraceStep.readEfSod);
+
     try {
       final sod = await passport.readEfSOD();
-      sodBytes = sod.toBytes();
-      trace.emit(NfcTraceStep.readEfSod, bytes: sodBytes.lengthInBytes);
+      final sodBytes = sod.toBytes();
+      stopwatch.stop();
+
+      trace.emit(
+        NfcTraceStep.readEfSod,
+        bytes: sodBytes.lengthInBytes,
+        detail: '${stopwatch.elapsedMilliseconds}ms',
+      );
+
+      return sodBytes;
     } catch (e) {
-      if (NfcErrorClassifier.isTagLostError(e)) {
-        throw NfcErrorClassifier.tagLost(stage: NfcReadStage.reading);
-      }
-      warnings.add(const NfcWarning(NfcWarningType.sodReadFailed));
+      _handleDgReadError(
+        step: NfcTraceStep.readEfSod,
+        warningType: NfcWarningType.sodReadFailed,
+        error: e,
+        trace: trace,
+        warnings: warnings,
+      );
+      return null;
+    }
+  }
+
+  /// Xử lý tập trung mọi ngoại lệ khi đọc Data Group:
+  /// - Rethrow ngay lập tức nếu là [NfcFailure] hoặc [tagLost] để huỷ phiên đọc
+  /// - Với các lỗi không-fatal khác: bóc tách status word SW1/SW2, format chi tiết kỹ thuật
+  ///   đã sanitize, ghi vào warnings và phát trace event chẩn đoán.
+  void _handleDgReadError({
+    required NfcTraceStep step,
+    required NfcWarningType warningType,
+    required Object error,
+    required _TraceSession trace,
+    required List<NfcWarning> warnings,
+  }) {
+    if (error is NfcFailure) throw error;
+    if (NfcErrorClassifier.isTagLostError(error)) {
+      throw NfcErrorClassifier.tagLost(stage: NfcReadStage.reading);
     }
 
+    final sw = _extractStatusWords(error);
+    final detail = _formatErrorDetail(error, sw1: sw.sw1, sw2: sw.sw2);
+
+    warnings.add(NfcWarning(warningType, detail: detail));
+    trace.emit(
+      step,
+      sw1: sw.sw1,
+      sw2: sw.sw2,
+      detail: 'failed: $detail',
+    );
+  }
+
+  /// Ghép nối kết quả [NfcRawResult] và [NfcParsedResult] với liên kết chéo 2 chiều.
+  ({NfcParsedResult parsed, NfcRawResult raw}) _buildSessionResults({
+    required String sessionId,
+    required _Identity identity,
+    required Uint8List? dg1Bytes,
+    required Uint8List? dg2Bytes,
+    required Uint8List? faceImageBytes,
+    required Uint8List? dg13Bytes,
+    required _Dg13Data dg13Data,
+    required Uint8List? dg14Bytes,
+    required _AaResult aaResult,
+    required Uint8List? sodBytes,
+    required Uint8List comBytes,
+    required List<NfcWarning> warnings,
+  }) {
     final baseRawResult = NfcRawResult.fromBytes(
-      sessionId: trace.sessionId,
+      sessionId: sessionId,
       dg1Bytes: dg1Bytes,
       sodBytes: sodBytes,
       dg13Bytes: dg13Bytes,
       dg2Bytes: dg2Bytes,
       dg14Bytes: dg14Bytes,
-      dg15Bytes: dg15Bytes,
+      dg15Bytes: aaResult.dg15Bytes,
       comBytes: comBytes,
-      aaChallenge: aaChallenge,
-      aaSignature: aaSignature,
-      aaStatus: aaStatus,
+      aaChallenge: aaResult.challenge,
+      aaSignature: aaResult.signature,
+      aaStatus: aaResult.status,
       warnings: warnings,
     );
 
     final parsedResult = NfcParsedResult(
-      sessionId: trace.sessionId,
+      sessionId: sessionId,
       idNumber: identity.idNumber,
       fullName: identity.fullName,
       fullNameWithDiacritics: dg13Data.fullName ?? identity.fullName,
@@ -416,26 +681,64 @@ class NfcChipReaderService {
       nationality: identity.nationality,
       faceImageBytes: faceImageBytes,
       extendedData: dg13Data.data,
-      aaChallenge: aaChallenge,
-      aaSignature: aaSignature,
-      aaPublicKeyBytes: aaPublicKeyBytes,
-      aaAlgorithm: aaAlgorithm,
-      aaStatus: aaStatus,
+      aaChallenge: aaResult.challenge,
+      aaSignature: aaResult.signature,
+      aaPublicKeyBytes: aaResult.publicKeyBytes,
+      aaAlgorithm: aaResult.algorithm,
+      aaStatus: aaResult.status,
       isChipAuthenticityVerified: false,
       warnings: warnings,
       raw: baseRawResult,
     );
 
     final rawResult = baseRawResult.copyWith(parsed: parsedResult);
-
     return (parsed: parsedResult, raw: rawResult);
   }
+
+  // ===========================================================================
+  // Helpers
+  // ===========================================================================
 
   Uint8List _generateAaChallenge() {
     final random = Random.secure();
     return Uint8List.fromList(
       List<int>.generate(Passport.aaChallengeLen, (_) => random.nextInt(256)),
     );
+  }
+
+  /// Bóc tách status words (SW1, SW2) từ exception nếu có.
+  ({int? sw1, int? sw2}) _extractStatusWords(Object error) {
+    if (error is PassportError) {
+      return (sw1: error.code?.sw1, sw2: error.code?.sw2);
+    }
+    try {
+      final dynamic dyn = error;
+      final dynamic sw = dyn.code ?? dyn.sw;
+      if (sw != null) {
+        final sw1 = sw.sw1;
+        final sw2 = sw.sw2;
+        if (sw1 is int && sw2 is int) {
+          return (sw1: sw1, sw2: sw2);
+        }
+      }
+    } catch (_) {}
+    return (sw1: null, sw2: null);
+  }
+
+  /// Định dạng chi tiết lỗi kỹ thuật kèm mã SW (nếu có) và sanitize an toàn.
+  String _formatErrorDetail(Object error, {int? sw1, int? sw2}) {
+    final buffer = StringBuffer();
+    if (sw1 != null && sw2 != null) {
+      final hex1 = sw1.toRadixString(16).padLeft(2, '0').toUpperCase();
+      final hex2 = sw2.toRadixString(16).padLeft(2, '0').toUpperCase();
+      buffer.write('SW=$hex1$hex2 ');
+    }
+    if (error is PassportError) {
+      buffer.write(error.message);
+    } else {
+      buffer.write(error.toString());
+    }
+    return _sanitize(buffer.toString()) ?? 'unknown error';
   }
 
   // Fingerprint 1 chiều CHỈ để đối chiếu 2 lần quét khác nhau (chống replay)
