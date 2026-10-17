@@ -200,6 +200,29 @@ try {
 
 Các mốc tiến trình gồm: `waitingForCard`, `authenticating`, `reading`, và `validating`.
 
+### Chữ trên sheet NFC của iOS
+
+Mặc định sheet NFC của iOS chỉ hiện chữ tiếng Anh của dmrtd và đóng lại không kèm ✓/✗.
+Truyền `iosAlertBuilder` để app tự trả chuỗi theo từng bước (lib chỉ đưa ra
+`NfcIosAlertState`: `step`, `progress` 0..1, `failure`). Trả `null` để giữ nguyên chữ
+đang hiển thị. Builder chỉ chạy trên iOS; bước `completed`/`failed` quyết định chữ trên
+dấu ✓/✗ khi sheet đóng. CoreNFC chỉ nhận chuỗi, nên "dots" dựng bằng ký tự Unicode:
+
+```dart
+String dots(double progress, {int total = 8}) {
+  final filled = (progress * total).round().clamp(0, total);
+  return '●' * filled + '○' * (total - filled);
+}
+
+final reader = NfcCccdReader(
+  iosAlertBuilder: (s) => switch (s.step) {
+    NfcTraceStep.completed => 'Đọc thẻ thành công',
+    NfcTraceStep.failed => 'Đọc thẻ thất bại',
+    _ => 'Giữ nguyên thẻ…\n${dots(s.progress)}',
+  },
+);
+```
+
 ### Tracing chi tiết (breadcrumb + SW1/SW2)
 
 Ngoài `stageStream` (mốc thô cho progress bar), `traceStream` phát mỗi bước đọc một

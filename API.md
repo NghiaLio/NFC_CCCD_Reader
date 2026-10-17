@@ -9,12 +9,41 @@ Package **không kèm string hiển thị** — lib chỉ trả enum/mã (vd `Nf
 ```dart
 final reader = NfcCccdReader(
   connectTimeout: const Duration(seconds: 20),
+  iosAlertBuilder: (state) => null, // tuỳ chọn, chỉ iOS
 );
 ```
 
 | Tham số | Kiểu | Mặc định | Mô tả |
 |---|---|---:|---|
 | `connectTimeout` | `Duration` | `20 giây` | Thời gian tối đa chờ kết nối thẻ NFC. |
+| `iosAlertBuilder` | `NfcIosAlertBuilder?` | `null` | Dựng chữ cho sheet NFC của iOS theo từng bước. `null` → giữ chữ mặc định tiếng Anh, không có ✓/✗. |
+
+### `iosAlertBuilder` / `NfcIosAlertState`
+
+`typedef NfcIosAlertBuilder = String? Function(NfcIosAlertState state);` — trả `null` để giữ nguyên chữ đang hiển thị. Chỉ được gọi trên iOS.
+
+| Trường `NfcIosAlertState` | Kiểu | Mô tả |
+|---|---|---|
+| `step` | `NfcTraceStep` | Bước hiện tại. `completed` → chữ ✓ khi đóng sheet; `failed` → chữ ✗. |
+| `progress` | `double` | Tiến độ ước lượng theo bước, 0..1 (DG2 là phần nặng nhất). |
+| `failure` | `NfcFailure?` | Khác `null` khi `step == failed`. |
+
+Ví dụ hiển thị dots:
+
+```dart
+String dots(double progress, {int total = 8}) {
+  final filled = (progress * total).round().clamp(0, total);
+  return '●' * filled + '○' * (total - filled);
+}
+
+final reader = NfcCccdReader(
+  iosAlertBuilder: (s) => switch (s.step) {
+    NfcTraceStep.completed => 'Đọc thẻ thành công',
+    NfcTraceStep.failed => 'Đọc thẻ thất bại',
+    _ => 'Giữ nguyên thẻ…\n${dots(s.progress)}',
+  },
+);
+```
 
 ## `NfcCccdReader`
 

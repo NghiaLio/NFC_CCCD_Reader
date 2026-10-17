@@ -18,6 +18,7 @@ export 'src/domain/entities/nfc_failure.dart';
 export 'src/domain/entities/nfc_error_details.dart';
 export 'src/domain/entities/nfc_warning.dart';
 export 'src/domain/entities/nfc_trace_event.dart';
+export 'src/domain/entities/nfc_ios_alert_state.dart';
 export 'src/domain/enums/nfc_availability_status.dart';
 export 'src/domain/enums/nfc_failure_type.dart';
 export 'src/domain/enums/nfc_gender.dart';
