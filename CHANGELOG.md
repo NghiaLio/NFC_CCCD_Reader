@@ -1,3 +1,12 @@
+## 0.3.0
+
+- **Feature:** thêm `iosAlertBuilder` (`NfcIosAlertBuilder`) cho `NfcCccdReader` để app
+  tự dựng chữ trên sheet NFC của iOS theo từng bước (`NfcIosAlertState`: `step`,
+  `progress`, `failure`). Lib vẫn không kèm string hiển thị.
+  - Chữ cập nhật theo từng bước đọc (bỏ trùng, không làm hỏng phiên đọc).
+  - Sheet đóng kèm ✓ (thành công) / ✗ (thất bại) với chữ do app cung cấp.
+  - Không truyền builder → hành vi giữ nguyên như 0.2.0.
+
 ## 0.2.0
 
 - **Breaking:** tách bạch UI và logic — lib KHÔNG còn kèm string hiển thị;

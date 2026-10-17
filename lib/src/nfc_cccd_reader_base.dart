@@ -5,6 +5,7 @@ import 'package:meta/meta.dart';
 import 'data/repository/nfc_repository_impl.dart';
 import 'data/service/nfc_chip_reader_service.dart';
 import 'domain/entities/nfc_failure.dart';
+import 'domain/entities/nfc_ios_alert_state.dart';
 import 'domain/entities/nfc_parsed_result.dart';
 import 'domain/entities/nfc_raw_result.dart';
 import 'domain/entities/nfc_read_input.dart';
@@ -15,8 +16,12 @@ import 'domain/repository/nfc_repository.dart';
 
 abstract interface class NfcCccdReader {
   /// Khởi tạo instance mặc định (dùng flutter_nfc_kit + dmrtd thật).
+  ///
+  /// [iosAlertBuilder]: tuỳ chọn, dựng chữ cho sheet NFC của iOS theo từng
+  /// bước (xem [NfcIosAlertState]). Không truyền → giữ chữ mặc định tiếng Anh.
   factory NfcCccdReader({
     Duration connectTimeout,
+    NfcIosAlertBuilder? iosAlertBuilder,
   }) = NfcCccdReaderBase;
 
   /// Kiểm tra NFC hệ thống: available / disabled / notSupported.
@@ -74,9 +79,11 @@ abstract interface class NfcCccdReader {
 class NfcCccdReaderBase implements NfcCccdReader {
   NfcCccdReaderBase({
     Duration connectTimeout = const Duration(seconds: 20),
+    NfcIosAlertBuilder? iosAlertBuilder,
   }) : _repository = NfcRepositoryImpl(
           chipReaderService: NfcChipReaderService(
             connectTimeout: connectTimeout,
+            iosAlertBuilder: iosAlertBuilder,
           ),
         );
 

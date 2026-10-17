@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:io' show Platform;
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -9,6 +11,7 @@ import '../../core/nfc_constants.dart';
 import '../../core/nfc_session_id.dart';
 import '../../domain/entities/nfc_error_details.dart';
 import '../../domain/entities/nfc_failure.dart';
+import '../../domain/entities/nfc_ios_alert_state.dart';
 import '../../domain/entities/nfc_parsed_result.dart';
 import '../../domain/entities/nfc_raw_result.dart';
 import '../../domain/entities/nfc_read_input.dart';
@@ -59,10 +62,77 @@ class NfcChipReaderService {
   NfcChipReaderService({
     NfcProvider? nfcProvider,
     this.connectTimeout = const Duration(seconds: 20),
-  }) : _nfcProvider = nfcProvider ?? NfcProvider();
+    NfcIosAlertBuilder? iosAlertBuilder,
+  })  : _nfcProvider = nfcProvider ?? NfcProvider(),
+        _iosAlertBuilder = iosAlertBuilder;
 
   final NfcProvider _nfcProvider;
   final Duration connectTimeout;
+  final NfcIosAlertBuilder? _iosAlertBuilder;
+
+  /// Chữ mặc định của dmrtd khi app không cung cấp builder.
+  static const _defaultIosConnectMessage =
+      'Hold your iPhone near the biometric Passport';
+
+  // Tiến độ ước lượng theo bước; DG2 là phần nặng nhất (~15–25KB).
+  static const _progressByStep = <NfcTraceStep, double>{
+    NfcTraceStep.connecting: 0.0,
+    NfcTraceStep.connected: 0.05,
+    NfcTraceStep.sessionStart: 0.10,
+    NfcTraceStep.sessionEstablished: 0.20,
+    NfcTraceStep.readEfCom: 0.30,
+    NfcTraceStep.readDg1: 0.35,
+    NfcTraceStep.readDg13: 0.45,
+    NfcTraceStep.readDg2: 0.55,
+    NfcTraceStep.readDg14: 0.80,
+    NfcTraceStep.readDg15Aa: 0.85,
+    NfcTraceStep.readEfSod: 0.90,
+    NfcTraceStep.completed: 1.0,
+  };
+
+  String? _lastIosMessage;
+
+  bool get _iosAlertEnabled => _iosAlertBuilder != null && Platform.isIOS;
+
+  String? _iosMessage(NfcTraceStep step, {NfcFailure? failure}) {
+    if (!_iosAlertEnabled) return null;
+    return _iosAlertBuilder!(
+      NfcIosAlertState(
+        step: step,
+        progress: _progressByStep[step] ?? 0,
+        failure: failure,
+      ),
+    );
+  }
+
+  /// Cập nhật chữ trên sheet iOS theo bước. Bỏ trùng (emit có thể gọi nhiều
+  /// lần/bước) và không bao giờ làm hỏng phiên đọc.
+  void _updateIosAlert(NfcTraceStep step) {
+    if (step == NfcTraceStep.completed || step == NfcTraceStep.failed) return;
+    if (!_progressByStep.containsKey(step)) return;
+    final msg = _iosMessage(step);
+    if (msg == null || msg == _lastIosMessage) return;
+    _lastIosMessage = msg;
+    unawaited(
+      _nfcProvider.setIosAlertMessage(msg).catchError((Object _) {}),
+    );
+  }
+
+  /// Đóng sheet iOS kèm ✓/✗; lỗi ở đây không được đè kết quả của phiên.
+  Future<void> _finishSession({NfcFailure? failure}) async {
+    try {
+      if (failure == null) {
+        await _nfcProvider.disconnect(
+          iosAlertMessage: _iosMessage(NfcTraceStep.completed),
+        );
+      } else {
+        await _nfcProvider.disconnect(
+          iosErrorMessage:
+              _iosMessage(NfcTraceStep.failed, failure: failure),
+        );
+      }
+    } catch (_) {}
+  }
 
   Future<NfcParsedResult> read(
     NfcReadInput input, {
@@ -113,7 +183,12 @@ class NfcChipReaderService {
       _TraceSession trace,
     ) reader,
   }) async {
-    final trace = _TraceSession(generateNfcSessionId(), onTrace ?? _noop);
+    _lastIosMessage = null;
+    final trace = _TraceSession(
+      generateNfcSessionId(),
+      onTrace ?? _noop,
+      onStep: _updateIosAlert,
+    );
     var stage = NfcReadStage.waitingForCard;
     try {
       trace.emit(NfcTraceStep.started);
@@ -121,7 +196,11 @@ class NfcChipReaderService {
 
       trace.emit(NfcTraceStep.connecting);
       try {
-        await _nfcProvider.connect(timeout: connectTimeout);
+        final connectMsg = _iosMessage(NfcTraceStep.connecting);
+        await _nfcProvider.connect(
+          timeout: connectTimeout,
+          iosAlertMessage: connectMsg ?? _defaultIosConnectMessage,
+        );
       } on NfcProviderError catch (e) {
         throw NfcFailure(
           NfcFailureType.timeout,
@@ -159,6 +238,7 @@ class NfcChipReaderService {
       stage = NfcReadStage.validating;
       onStage?.call(stage);
       trace.emit(NfcTraceStep.completed);
+      await _finishSession();
       return result;
     } catch (e) {
       var failure = e is NfcFailure ? e : _classify(e, stage);
@@ -182,8 +262,10 @@ class NfcChipReaderService {
         sw2: details?.sw2,
         detail: detailMsg,
       );
+      await _finishSession(failure: failure);
       throw failure;
     } finally {
+      // Lưới an toàn: isConnected() đã false thì là no-op.
       await _nfcProvider.disconnect();
     }
   }
@@ -771,9 +853,11 @@ class NfcChipReaderService {
 
 /// Trạng thái 1 phiên đọc dùng để phát breadcrumb [NfcTraceEvent].
 class _TraceSession {
-  _TraceSession(this.sessionId, this.onTrace) : startedAt = DateTime.now();
+  _TraceSession(this.sessionId, this.onTrace, {this.onStep})
+      : startedAt = DateTime.now();
 
   final String sessionId;
+  final void Function(NfcTraceStep step)? onStep;
   final void Function(NfcTraceEvent event) onTrace;
   final DateTime startedAt;
 
@@ -784,6 +868,7 @@ class _TraceSession {
     int? bytes,
     String? detail,
   }) {
+    onStep?.call(step);
     final now = DateTime.now();
     onTrace(
       NfcTraceEvent(
