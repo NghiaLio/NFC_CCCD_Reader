@@ -1,3 +1,12 @@
+## 0.3.1
+
+- **Refactor:** tái cấu trúc toàn diện tầng dịch vụ đọc chip (`NfcChipReaderService`) để tăng tính dễ đọc, dễ bảo trì và kiểm thử:
+  - Phân rã monolithic service thành các module đơn nhiệm (SRP): `NfcIosAlertManager`, `NfcSessionLifecycle`, `NfcTraceSession`, `CardAuthenticator`, `NfcResultAssembler`.
+  - Tách pipeline các Data Group Reader độc lập (`Dg1Reader`, `Dg2Reader`, `Dg13Reader`, `Dg14Reader`, `Dg15AaReader`, `EfSodReader`).
+  - Tinh gọn `NfcChipReaderService` thành Orchestrator (~180 dòng) và loại bỏ mã lặp callback ở `NfcCccdReaderBase`.
+  - Giữ nguyên 100% public API (zero breaking changes).
+- **Test:** bổ sung 15 unit test mới kiểm thử độc lập cho các component (đạt 37/37 tests passed).
+
 ## 0.3.0
 
 - **Feature:** thêm `iosAlertBuilder` (`NfcIosAlertBuilder`) cho `NfcCccdReader` để app

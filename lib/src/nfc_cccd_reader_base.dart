@@ -99,6 +99,20 @@ class NfcCccdReaderBase implements NfcCccdReader {
   Future<NfcAvailabilityStatus> checkAvailability() =>
       _repository.checkAvailability();
 
+  void Function(NfcReadStage stage) _relayStage(
+          void Function(NfcReadStage stage)? onStage) =>
+      (stage) {
+        _stageController.add(stage);
+        onStage?.call(stage);
+      };
+
+  void Function(NfcTraceEvent event) _relayTrace(
+          void Function(NfcTraceEvent event)? onTrace) =>
+      (event) {
+        _traceController.add(event);
+        onTrace?.call(event);
+      };
+
   @override
   Future<NfcParsedResult> read(
     NfcReadInput input, {
@@ -107,14 +121,8 @@ class NfcCccdReaderBase implements NfcCccdReader {
   }) {
     return _repository.readChip(
       input,
-      onStage: (stage) {
-        _stageController.add(stage);
-        onStage?.call(stage);
-      },
-      onTrace: (event) {
-        _traceController.add(event);
-        onTrace?.call(event);
-      },
+      onStage: _relayStage(onStage),
+      onTrace: _relayTrace(onTrace),
     );
   }
 
@@ -134,14 +142,8 @@ class NfcCccdReaderBase implements NfcCccdReader {
   }) {
     return _repository.readRawChip(
       input,
-      onStage: (stage) {
-        _stageController.add(stage);
-        onStage?.call(stage);
-      },
-      onTrace: (event) {
-        _traceController.add(event);
-        onTrace?.call(event);
-      },
+      onStage: _relayStage(onStage),
+      onTrace: _relayTrace(onTrace),
     );
   }
 
